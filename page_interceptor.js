@@ -33,7 +33,7 @@
                     lower.includes('.webm') ||
                     (lower.includes('fbcdn.net') && lower.includes('video')) ||
                     (lower.includes('cdninstagram.com') && lower.includes('video')) ||
-                    (lower.includes('licdn.com') && lower.includes('video'));
+                    (lower.includes('licdn.com') && (lower.includes('video') || lower.includes('playlist')));
 
                 if (looksLikeVideo) {
                     found.add(val);
@@ -133,7 +133,7 @@
                             lowerVal.includes('.mp4') ||
                             lowerVal.includes('.m4v') ||
                             lowerVal.includes('.webm') ||
-                            (lowerVal.includes('licdn.com') && lowerVal.includes('video')) ||
+                            (lowerVal.includes('licdn.com') && (lowerVal.includes('video') || lowerVal.includes('playlist'))) ||
                             (lowerVal.includes('fbcdn.net') && lowerVal.includes('video')) ||
                             (lowerVal.includes('cdninstagram.com') && lowerVal.includes('video'));
 

@@ -68,88 +68,142 @@ function isRawMediaTab() {
     return false;
 }
 
-function isLikelyUiThumbnail(media) {
-    if (media.tagName.toLowerCase() !== 'img') return false;
+const PlatformManager = {
+    getPlatform() {
+        const host = window.location.hostname.toLowerCase();
+        if (host.includes('instagram.com')) return this.instagram;
+        if (host.includes('linkedin.com')) return this.linkedin;
+        return this.generic;
+    },
 
-    const rect = media.getBoundingClientRect();
-    const naturalW = media.naturalWidth || media.width;
-    const naturalH = media.naturalHeight || media.height;
+    instagram: {
+        name: 'instagram',
+        getContext() {
+            const path = window.location.pathname.toLowerCase();
+            if (path === '/' || path === '') return 'ig-home';
+            if (path.includes('/direct/')) return 'ig-dm';
+            if (path.includes('/reels/') || path.includes('/reel/')) return 'ig-reels';
+            if (path.includes('/stories/')) return 'ig-stories';
+            if (path.includes('/p/')) return 'ig-post-modal';
+            return 'ig-profile';
+        },
+        hasActiveModal() {
+            return document.querySelector('[role="dialog"]') !== null;
+        },
+        isInsideModal(media) {
+            const dialogs = document.querySelectorAll('[role="dialog"]');
+            for (const dialog of dialogs) {
+                if (dialog.contains(media)) return true;
+            }
+            return false;
+        },
+        isThumbnail(media) {
+            if (media.tagName.toLowerCase() !== 'img') return false;
+            const rect = media.getBoundingClientRect();
+            const naturalW = media.naturalWidth || media.width;
+            const naturalH = media.naturalHeight || media.height;
+            if (naturalW >= 200 && naturalH >= 200) return false;
+            if (naturalW < 100 || naturalH < 100) return true;
+            if (rect.width < 100 || rect.height < 100) return true;
+            
+            const path = window.location.pathname.toLowerCase();
+            if (path.includes('/direct/')) {
+                if (rect.width < 180 || rect.height < 180) return true;
+                if (media.closest('[role="button"]') && rect.width < 60) return true;
+            }
+            
+            const role = (media.getAttribute('role') || '').toLowerCase();
+            if (role === 'presentation' || role === 'none') return true;
+            const parent = media.closest('button, a, [role="button"], nav, header');
+            if (parent && (rect.width < 160 || rect.height < 160)) return true;
+            return false;
+        },
+        getButtonScale(media) {
+            const rect = media.getBoundingClientRect();
+            const minSide = Math.min(rect.width, rect.height);
+            if (window.location.pathname.toLowerCase().includes('/direct/')) return 0.75;
+            if (minSide < 180) return 0.85;
+            if (minSide < 280) return 0.95;
+            return 1;
+        }
+    },
 
-    // If it's a large content image, do not treat as a thumbnail
-    if (naturalW >= 200 && naturalH >= 200) {
-        return false;
+    linkedin: {
+        name: 'linkedin',
+        getContext() {
+            const path = window.location.pathname.toLowerCase();
+            if (path.includes('/messaging/')) return 'li-messaging';
+            if (path.includes('/jobs/')) return 'li-jobs';
+            if (path.includes('/learning/')) return 'li-learning';
+            return 'li-feed';
+        },
+        hasActiveModal() {
+            return document.querySelector('.artdeco-modal') !== null || document.querySelector('#artdeco-modal-outlet > *') !== null;
+        },
+        isInsideModal(media) {
+            return media.closest('.artdeco-modal') !== null || media.closest('#artdeco-modal-outlet') !== null;
+        },
+        isThumbnail(media) {
+            if (media.tagName.toLowerCase() !== 'img') return false;
+            const rect = media.getBoundingClientRect();
+            const naturalW = media.naturalWidth || media.width;
+            const naturalH = media.naturalHeight || media.height;
+            if (naturalW >= 200 && naturalH >= 200) return false;
+            if (naturalW < 100 || naturalH < 100) return true;
+            if (rect.width < 100 || rect.height < 100) return true;
+            
+            // Ignore avatars and small UI images
+            if (media.closest('.presence-entity') || media.closest('.ivm-image-view-model') || media.closest('.update-components-actor')) {
+                if (rect.width < 150) return true;
+            }
+            return false;
+        },
+        getButtonScale(media) {
+            const rect = media.getBoundingClientRect();
+            const minSide = Math.min(rect.width, rect.height);
+            if (minSide < 180) return 0.85;
+            if (minSide < 280) return 0.95;
+            return 1;
+        }
+    },
+
+    generic: {
+        name: 'generic',
+        getContext() { return 'generic'; },
+        hasActiveModal() { return false; },
+        isInsideModal() { return false; },
+        isThumbnail(media) {
+            if (media.tagName.toLowerCase() !== 'img') return false;
+            const rect = media.getBoundingClientRect();
+            const naturalW = media.naturalWidth || media.width;
+            const naturalH = media.naturalHeight || media.height;
+            if (naturalW >= 200 && naturalH >= 200) return false;
+            if (naturalW < 100 || naturalH < 100) return true;
+            if (rect.width < 100 || rect.height < 100) return true;
+            return false;
+        },
+        getButtonScale(media) {
+            const rect = media.getBoundingClientRect();
+            const minSide = Math.min(rect.width, rect.height);
+            if (minSide < 180) return 0.85;
+            if (minSide < 280) return 0.95;
+            return 1;
+        }
     }
-
-    if (naturalW < 100 || naturalH < 100) return true;
-    if (rect.width < 100 || rect.height < 100) return true;
-
-    // Stricter check for DM chat thumbnails
-    const path = window.location.pathname.toLowerCase();
-    if (path.includes('/direct/')) {
-        if (rect.width < 180 || rect.height < 180) return true;
-        // Skip avatar images
-        if (media.closest('[role="button"]') && rect.width < 60) return true;
-    }
-
-    const role = (media.getAttribute('role') || '').toLowerCase();
-    if (role === 'presentation' || role === 'none') return true;
-
-    const parent = media.closest('button, a, [role="button"], nav, header');
-    if (parent && (rect.width < 160 || rect.height < 160)) return true;
-
-    return false;
-}
-
-function getInstagramContext() {
-    const path = window.location.pathname.toLowerCase();
-    if (path === '/' || path === '') return 'home';
-    if (path.includes('/direct/')) return 'dm';
-    if (path.includes('/reels/') || path.includes('/reel/')) return 'reels';
-    if (path.includes('/stories/')) return 'stories';
-    if (path.includes('/p/')) return 'post-modal';
-    return 'profile';
-}
-
-function isInsideInstagramModal(media) {
-    // Check if there is an active dialog
-    const dialogs = document.querySelectorAll('[role="dialog"]');
-    if (dialogs.length === 0) return true; // No modal open, so it's fine
-
-    // If a modal is open, the media must be inside it to be considered valid
-    for (const dialog of dialogs) {
-        if (dialog.contains(media)) return true;
-    }
-    
-    return false;
-}
-
-function getButtonScale(media) {
-    const rect = media.getBoundingClientRect();
-    const minSide = Math.min(rect.width, rect.height);
-    
-    const path = window.location.pathname.toLowerCase();
-    if (path.includes('/direct/')) {
-        return 0.75; // Smaller buttons in DMs to avoid clashing
-    }
-    
-    if (minSide < 180) return 0.85;
-    if (minSide < 280) return 0.95;
-    return 1;
-}
+};
 
 function injectDownloadButtons() {
     if (isRawMediaTab()) return;
 
     const mediaElements = document.querySelectorAll('video, img');
-    
-    // Quick check: is a modal open? If so, we only want media inside it.
-    const hasModal = document.querySelector('[role="dialog"]') !== null;
+    const platform = PlatformManager.getPlatform();
+    const hasModal = platform.hasActiveModal();
 
     mediaElements.forEach(media => {
-        if (isLikelyUiThumbnail(media)) return;
+        if (platform.isThumbnail(media)) return;
         
         // If a modal is open, only inject on elements inside the modal
-        if (hasModal && !isInsideInstagramModal(media)) return;
+        if (hasModal && !platform.isInsideModal(media)) return;
 
         if (window.magicOverlayManager && !window.magicOverlayManager.overlays.has(media)) {
             const isVideo = media.tagName.toLowerCase() === 'video';
@@ -158,7 +212,7 @@ function injectDownloadButtons() {
                 media.dataset.magicId = magicId;
             }
 
-            const scale = getButtonScale(media);
+            const scale = platform.getButtonScale(media);
 
             const createButtonsFn = () => {
                 const buttons = [];

@@ -157,15 +157,29 @@ class OverlayManager {
 
         // 2. Multiple overlapping media elements. Find the topmost one using native z-index/stacking!
         const hits = document.elementsFromPoint(x, y);
+        let matchedCandidates = [];
+
         for (const el of hits) {
             for (const candidate of hoverCandidates) {
                 const entry = candidate.entry;
                 const media = candidate.media;
                 if (el === entry.hoverHost || entry.hoverHost.contains(el) || el === media || media.contains(el)) {
-                    this._show(entry);
-                    return;
+                    if (!matchedCandidates.includes(candidate)) {
+                        matchedCandidates.push(candidate);
+                    }
                 }
             }
+        }
+
+        if (matchedCandidates.length > 0) {
+            // Prioritize <video> tags over <img> tags (e.g. poster images covering the video)
+            const videoCandidate = matchedCandidates.find(c => c.media.tagName.toLowerCase() === 'video');
+            if (videoCandidate) {
+                this._show(videoCandidate.entry);
+            } else {
+                this._show(matchedCandidates[0].entry);
+            }
+            return;
         }
 
         // Fallback: If elementsFromPoint failed to match (e.g. full-screen transparent interceptor div),

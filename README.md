@@ -1,4 +1,4 @@
-# Toystaller - Version 4 (Page-Aware Media Extraction & DM Support)
+# Toystaller - Version 4 (Page-Aware Media Extraction)
 
 Toystaller is a lightweight, secure browser extension that extracts high-quality media URLs and adds hover action buttons to videos and images across the web.
 
@@ -16,14 +16,15 @@ Toystaller is a lightweight, secure browser extension that extracts high-quality
 
 ## 🚀 What's New in Version 4
 
-Version 4 makes Toystaller deeply aware of complex website structures (especially Instagram) to completely eliminate overlapping "ghost" buttons on hidden media.
+Version 4 introduces the **Platform Abstraction Layer**, allowing Toystaller to understand the specific UI layout and page context of Instagram and LinkedIn to perfectly place action buttons and avoid UI overlap.
 
 | Feature | Description |
 |---------------|-----------|
 | **Overflow-Clip Detection** | Buttons are no longer injected on media that is physically hidden inside `overflow: hidden` or scrollable carousel containers, even if they pass standard intersection checks. |
-| **Modal Context Awareness** | When viewing an Instagram post inside a modal (popup overlay), Toystaller automatically hides buttons for the background feed, keeping your focus strictly on the active media. |
+| **LinkedIn Modals Fixed** | Fixed a critical bug where LinkedIn's messaging tab (which uses `role="dialog"`) was mistakenly treated as a full-screen modal, blocking feed videos. Modals are now tracked using LinkedIn's native `.artdeco-modal` classes. |
+| **Instagram Modal Context** | When viewing an Instagram post inside a modal (popup overlay), Toystaller automatically hides buttons for the background feed, keeping your focus strictly on the active media. |
 | **DM Chat Extraction** | Full support for Instagram Private Messages. Intercepts GraphQL API responses to accurately extract progressive video URLs shared in DMs, with scaled-down buttons to avoid UI clashes. |
-| **Reels & Stories Optimization** | Action buttons now intelligently snap to the top-left corner on Reels to avoid overlapping with Instagram's native like/comment action column. |
+| **Platform Contexts** | The extension now dynamically adjusts its logic based on the specific page you are on (e.g. `ig-reels`, `li-messaging`, `ig-post-modal`). |
 
 ---
 
