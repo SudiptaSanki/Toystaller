@@ -8,13 +8,17 @@ function bootToystaller() {
     if (toystallerBooted) return;
     toystallerBooted = true;
 
-    // Inject platform scripts and page_interceptor.js dynamically into the MAIN world
+    // Inject platform script and page_interceptor.js dynamically into the MAIN world
     // to ensure they have access to the same window object and execute in order.
+    const host = window.location.hostname.toLowerCase();
+    let platformScript = 'platforms/generic.js';
+    if (host.includes('instagram.com')) platformScript = 'platforms/instagram.js';
+    else if (host.includes('facebook.com')) platformScript = 'platforms/facebook.js';
+    else if (host.includes('linkedin.com')) platformScript = 'platforms/linkedin.js';
+    else if (host.includes('whatsapp.com')) platformScript = 'platforms/whatsapp.js';
+
     const scriptsToInject = [
-        'platforms/generic.js',
-        'platforms/instagram.js',
-        'platforms/facebook.js',
-        'platforms/linkedin.js',
+        platformScript,
         'page_interceptor.js'
     ];
 
@@ -152,13 +156,18 @@ const FALLBACK_PLATFORM = {
 
 const PlatformManager = {
     getPlatform() {
-        const platforms = window.ToystallerPlatforms;
-        if (!platforms) return FALLBACK_PLATFORM;
         const host = window.location.hostname.toLowerCase();
-        if (host.includes('instagram.com')) return platforms['instagram'] || FALLBACK_PLATFORM;
-        if (host.includes('linkedin.com')) return platforms['linkedin'] || FALLBACK_PLATFORM;
-        if (host.includes('facebook.com')) return platforms['facebook'] || FALLBACK_PLATFORM;
-        return platforms['generic'] || FALLBACK_PLATFORM;
+        const platforms = window.ToystallerPlatforms;
+        if (platforms) {
+            if (host.includes('instagram.com') && platforms['instagram']) return platforms['instagram'];
+            if (host.includes('facebook.com') && platforms['facebook']) return platforms['facebook'];
+            if (host.includes('linkedin.com') && platforms['linkedin']) return platforms['linkedin'];
+            if (host.includes('whatsapp.com') && platforms['whatsapp']) return platforms['whatsapp'];
+            if (platforms['generic']) return platforms['generic'];
+        }
+        if (window.ToystallerActivePlatform) return window.ToystallerActivePlatform;
+        if (window.ToystallerPlatform) return window.ToystallerPlatform;
+        return FALLBACK_PLATFORM;
     }
 };
 
@@ -263,17 +272,24 @@ function injectDownloadButtons() {
                 openBtn.addEventListener('click', (e) => {
                     e.preventDefault();
                     e.stopPropagation();
+                    const platform = PlatformManager.getPlatform();
+                    const platformName = platform.name || '';
                     if (!isVideo) {
-                        safeSendMessage({ action: 'openInNewTab', url: getHighResImageUrl() });
+                        safeSendMessage({ 
+                            action: 'openInNewTab', 
+                            url: getHighResImageUrl(), 
+                            isVideo: false, 
+                            platform: platformName 
+                        });
                     } else {
                         getMediaUrl((url) => {
-                            const host = window.location.hostname.toLowerCase();
-                            // Trigger direct download instead of new tab to avoid referrer/session blocking for FB/LI
-                            if (host.includes('facebook.com') || host.includes('linkedin.com')) {
-                                safeSendMessage({ action: 'downloadMedia', url: url });
-                            } else {
-                                safeSendMessage({ action: 'openInNewTab', url: url });
-                            }
+                            if (!url) return;
+                            safeSendMessage({ 
+                                action: 'openInNewTab', 
+                                url: url, 
+                                isVideo: true, 
+                                platform: platformName 
+                            });
                         });
                     }
                 });
@@ -325,7 +341,7 @@ function injectDownloadButtons() {
                                         if (response && response.urls && response.urls.length > 0) {
                                             const covers = response.urls.filter(u => u.includes('videocover'));
                                             if (covers.length > 0) {
-                                                safeSendMessage({ action: 'openInNewTab', url: covers[0] });
+                                                safeSendMessage({ action: 'openInNewTab', url: covers[0], isVideo: false, platform: 'LinkedIn' });
                                                 return;
                                             }
                                         }
@@ -347,7 +363,8 @@ function injectDownloadButtons() {
                                 resolved = true;
                                 window.removeEventListener('message', handler);
                                 if (e.data.url) {
-                                    safeSendMessage({ action: 'openInNewTab', url: e.data.url });
+                                    const pName = host.includes('facebook.com') ? 'Facebook' : 'Instagram';
+                                    safeSendMessage({ action: 'openInNewTab', url: e.data.url, isVideo: false, platform: pName });
                                 } else {
                                     alert('No thumbnail image available for this video.');
                                 }
@@ -364,13 +381,15 @@ function injectDownloadButtons() {
                             return; // exit early because it's async
                         }
 
+                        const pName = PlatformManager.getPlatform().name || '';
                         if (poster) {
-                            safeSendMessage({ action: 'openInNewTab', url: poster });
+                            safeSendMessage({ action: 'openInNewTab', url: poster, isVideo: false, platform: pName });
                         } else {
                             alert('No thumbnail image available for this video.');
                         }
                     } else {
-                        safeSendMessage({ action: 'openInNewTab', url: getHighResImageUrl() });
+                        const pName = PlatformManager.getPlatform().name || '';
+                        safeSendMessage({ action: 'openInNewTab', url: getHighResImageUrl(), isVideo: false, platform: pName });
                     }
                 });
                 buttons.push(imgBtn);
@@ -730,7 +749,7 @@ function toggleDashboardOverlay() {
             
             <div class="dashboard">
                 <div class="header">
-                    <h2>Toystaller v6</h2>
+                    <h2>Toystaller v5</h2>
                     <button class="close-btn" id="closeBtn" title="Close">&times;</button>
                 </div>
                 

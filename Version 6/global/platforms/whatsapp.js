@@ -1,149 +1,221 @@
-// extensions/global/platforms/whatsapp.js
-// WhatsApp Web platform configuration for the global extension.
+// platforms/whatsapp.js
+// Specialized WhatsApp Platform Layer for Toystaller v1.0
+// Supports: Chat Conversation Messages, Status/Stories Viewer, Fullscreen Media Lightbox, and Contact Info Drawer.
+
+window.ToystallerPlatforms = window.ToystallerPlatforms || {};
 
 (function() {
-    window.ToystallerPlatforms = window.ToystallerPlatforms || {};
     const whatsappPlatform = {
-        name: 'WhatsApp',
-        version: 'v6.0',
-        specialization: 'Downloads encrypted media blobs directly from WhatsApp Web, intercepting CDN URLs for status updates and chats.',
+        name: 'whatsapp',
+        version: 'v1.0',
+        specialization: 'WhatsApp Web media extraction — Chats, Status, and Media Lightbox.',
 
-        // --- Content Script Interface ---
+        // --- Route & Section Detection ---
+        getSection(targetMedia) {
+            // Check specific element context first if provided
+            if (targetMedia && targetMedia.nodeType) {
+                // Priority 1: Fullscreen status / story viewer
+                if (targetMedia.closest('[data-animate-status-v3="true"], div[data-testid="status-v3-main"], div[data-testid="status-viewer"], div[aria-label*="Status" i]')) {
+                    return 'wa-status';
+                }
+                const dialog = targetMedia.closest('div[role="dialog"], div[role="region"], div.app-wrapper-web');
+                if (dialog) {
+                    const hasReply = dialog.querySelector('input[placeholder*="reply" i], div[title*="reply" i], div[data-testid="status-reply-box"]');
+                    const hasStatusProgress = dialog.querySelector('[data-testid="status-progress-bar"], [data-testid="status-header"], div[aria-label*="Status" i]');
+                    const hasStoryControls = dialog.querySelector('button[aria-label*="Pause" i], button[aria-label*="Play" i]');
+                    const isLightbox = dialog.querySelector('[data-testid="media-viewer"], [data-animate-media-viewer="true"]');
+                    
+                    if (!isLightbox && (hasReply || hasStatusProgress || hasStoryControls)) {
+                        return 'wa-status';
+                    }
+                    if (isLightbox || dialog.querySelector('button[aria-label*="Forward" i], button[aria-label*="Star" i]')) {
+                        return 'wa-media-viewer';
+                    }
+                }
 
-        getPlatformConfig(path) {
+                // Main conversation chat messages
+                if (targetMedia.closest('div[role="row"], div[data-testid="msg-container"], div[data-id], div.message-in, div.message-out, div[data-testid="conversation-panel-messages"]')) {
+                    return 'wa-chat';
+                }
+
+                // Contact / Group info drawer
+                if (targetMedia.closest('div[data-testid="drawer-right"], div[data-testid="chat-info-drawer"], div[data-testid="contact-info"]')) {
+                    return 'wa-profile';
+                }
+            }
+
+            // Global page-level checks:
+            // Status check MUST take precedence over generic dialogs
+            if (document.querySelector('[data-animate-status-v3="true"], div[data-testid="status-v3-main"], div[data-testid="status-viewer"], div[data-testid="status-reply-box"]') ||
+                document.querySelector('input[placeholder*="reply" i], div[title*="reply" i]')) {
+                return 'wa-status';
+            }
+
+            // Media lightbox viewer
+            if (document.querySelector('[data-animate-media-viewer="true"], div[data-testid="media-viewer"], div[data-testid="media-viewer-modal"]')) {
+                return 'wa-media-viewer';
+            }
+
+            // Contact / Group info drawer (wa-profile)
+            if (document.querySelector('div[data-testid="drawer-right"], div[data-testid="chat-info-drawer"], div[data-testid="contact-info"]')) {
+                return 'wa-profile';
+            }
+
+            // Main active conversation message stream
+            if (document.querySelector('div[data-testid="conversation-panel-messages"], div[role="region"][aria-label*="Message" i], div[data-testid="conversation-panel-body"]')) {
+                return 'wa-chat';
+            }
+
+            return 'whatsapp'; // General fallback
+        },
+
+        // --- Corner Placement Config Per Section ---
+        getPlatformConfig(sectionOrMedia) {
+            let section = typeof sectionOrMedia === 'string' ? sectionOrMedia : this.getSection(sectionOrMedia);
+
+            if (section === 'wa-status') {
+                // Clear WhatsApp status top header (progress bar, contact info, play/pause/mute buttons)
+                // and bottom reply drawer ("Type a reply...")
+                return { 
+                    preferredCorners: ['top-right', 'top-left'], 
+                    padding: 16, 
+                    topOffset: 75,     // Safe distance below native ~65px status header
+                    bottomOffset: 80   // Safe distance above bottom "Type a reply..." input
+                };
+            }
+            if (section === 'wa-media-viewer') {
+                // Keep buttons clear of WhatsApp top-right controls (Close, Forward, Star)
+                return { 
+                    preferredCorners: ['top-left', 'top-right', 'bottom-right'], 
+                    padding: 16, 
+                    topOffset: 72,
+                    bottomOffset: 60
+                };
+            }
+            if (section === 'wa-chat') {
+                return { preferredCorners: ['top-right', 'top-left', 'bottom-right'], padding: 8 };
+            }
+            
             return { preferredCorners: ['top-right', 'top-left', 'bottom-right'], padding: 10 };
         },
 
-        getContext(path) {
-            return 'whatsapp';
-        },
+        // --- Modal Detection ---
+        _modalSelector: '[data-animate-media-viewer="true"], div[role="dialog"], div[data-testid="media-viewer"], div[data-testid="media-viewer-modal"], [data-animate-status-v3="true"], div[data-testid="status-v3-main"], div[data-testid="status-viewer"]',
 
         hasActiveModal() {
-            // WhatsApp image/video viewer uses a full-screen overlay
-            const mediaViewer = document.querySelector('[data-testid="media-viewer"]') ||
-                                document.querySelector('.overlay, ._3YS8Q, [role="dialog"]');
-            return !!mediaViewer;
+            const viewer = document.querySelector(this._modalSelector);
+            if (!viewer || !viewer.isConnected) return false;
+            
+            // Note: Fixed-position elements have offsetParent === null in Blink/WebKit!
+            // We verify visibility via getComputedStyle and bounding dimensions.
+            const style = window.getComputedStyle(viewer);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+                return false;
+            }
+            const rect = viewer.getBoundingClientRect();
+            return rect.width > 50 && rect.height > 50;
+        },
+
+        getActiveModal() {
+            return this.hasActiveModal() ? document.querySelector(this._modalSelector) : null;
         },
 
         isInsideModal(media) {
-            const mediaViewer = document.querySelector('[data-testid="media-viewer"]') ||
-                                document.querySelector('.overlay, ._3YS8Q, [role="dialog"]');
-            return mediaViewer ? mediaViewer.contains(media) : false;
+            if (!media) return false;
+            const modal = media.closest(this._modalSelector);
+            return modal !== null;
         },
 
+        // --- Thumbnail / Eligibility Filter (per section) ---
         isThumbnail(media) {
-            if (media.tagName.toLowerCase() !== 'img') return false;
+            if (!media) return true;
             const rect = media.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) return true;
 
-            // WhatsApp profile pictures and status icons
-            const style = window.getComputedStyle(media);
-            if (style.borderRadius && (style.borderRadius.includes('50%') || parseInt(style.borderRadius) > 40)) return true;
+            const section = this.getSection(media);
 
-            // Small avatars in chat list
-            if (rect.width < 80 || rect.height < 80) return true;
+            // Strict isolation: if a modal (status or lightbox) is active, only allow media inside it
+            if (this.hasActiveModal()) {
+                if (!this.isInsideModal(media)) return true;
+                
+                // Exclude tiny UI icons or small avatars inside the modal
+                if (rect.width < 70 || rect.height < 70) return true;
+                return false;
+            }
 
-            // Emoji images and reaction icons
-            const alt = (media.getAttribute('alt') || '').toLowerCase();
-            if (alt.includes('emoji') || alt.includes('sticker')) return true;
+            // Exclude circular avatars in chat list / sidebar (pane-side)
+            if (media.closest('#pane-side, div[data-testid="chat-list"], div[data-testid="cell-frame-container"]')) {
+                return true;
+            }
 
-            // WhatsApp UI icons
-            const src = (media.src || '').toLowerCase();
-            if (src.includes('data:image/svg') || src.includes('emoji')) return true;
+            // Exclude avatars with border-radius 50% or small dimensions
+            if (rect.width <= 60 && rect.height <= 60) {
+                return true;
+            }
 
-            return false;
+            // Exclude emojis, stickers, reaction badges
+            if (media.src && (media.src.includes('sticker') || media.src.includes('emoji'))) return true;
+            if (media.alt && media.alt.length <= 4 && rect.width < 60) return true;
+            if (rect.width < 50 || rect.height < 50) return true;
+
+            // Target valid post media in messages
+            if (section === 'wa-chat' || media.closest('div[role="row"], div[data-testid="msg-container"], div[data-id], div.message-in, div.message-out')) {
+                if (Math.max(rect.width, rect.height) >= 90) return false;
+                return true;
+            }
+
+            // Media in drawer right (contact info media grid)
+            if (section === 'wa-profile') {
+                if (rect.width >= 70 && rect.height >= 70) return false;
+            }
+
+            if (Math.max(rect.width, rect.height) >= 90) return false;
+            return true;
         },
 
+        // --- Button Scale Per Section ---
         getButtonScale(media) {
             const rect = media.getBoundingClientRect();
             const minSide = Math.min(rect.width, rect.height);
-            if (minSide < 180) return 0.85;
-            if (minSide < 280) return 0.95;
-            return 1;
+            
+            if (minSide < 160) return 0.8;
+            if (minSide < 240) return 0.9;
+            return 1.0;
         },
 
-        // WhatsApp blob: URLs work with direct download via chrome.downloads
-        useDirectDownload: true,
-
+        // --- Extraction Config ---
+        useDirectDownload: false,
         useReactThumbnail: false,
 
         isInternalUrl(url) {
             const lower = (url || '').toLowerCase();
-            return lower.includes('//web.whatsapp.com') && !lower.includes('mmg.whatsapp.net');
-        },
-
-        filterBackgroundUrls(candidates, isVideo) {
-            return candidates.filter(u => {
-                const lower = u.toLowerCase();
-                // WhatsApp media is served from mmg.whatsapp.net or mmg-fna.whatsapp.net
-                if (lower.includes('mmg.whatsapp.net') || lower.includes('mmg-fna.whatsapp.net')) return true;
-                if (isVideo && lower.includes('.mp4')) return true;
-                return false;
-            });
-        },
-
-        // --- Interceptor Interface (MAIN world) ---
-
-        getInterceptUrls() {
-            return ['web.whatsapp.com', 'mmg.whatsapp.net', 'mmg-fna.whatsapp.net'];
+            return lower.includes('web.whatsapp.com') || lower.includes('.whatsapp.net');
         },
 
         shouldSkipReactValue(val, key, isVideoContext) {
-            const lowerVal = val.toLowerCase();
-            // Skip WhatsApp internal navigation URLs
-            if (lowerVal.includes('//web.whatsapp.com') && !lowerVal.includes('mmg')) return true;
             return false;
         },
-
         looksLikeReactImage(val, key) {
-            const lowerVal = val.toLowerCase();
-            const lowerKey = key.toLowerCase();
-            return (
-                lowerKey.includes('image') ||
-                lowerKey.includes('thumbnail') ||
-                lowerKey.includes('preview') ||
-                lowerVal.includes('.jpg') ||
-                lowerVal.includes('.jpeg') ||
-                lowerVal.includes('.png') ||
-                lowerVal.includes('.webp') ||
-                (lowerVal.includes('mmg') && !lowerVal.includes('video'))
-            );
+            return false;
         },
-
         looksLikeReactVideo(val, key) {
-            const lowerVal = val.toLowerCase();
-            return (lowerVal.includes('mmg') && lowerVal.includes('video')) ||
-                   lowerVal.includes('.mp4') ||
-                   lowerVal.includes('.webm');
+            return false;
         },
-
         extractPriorityReactUrl(val, isVideoContext) {
-            // WhatsApp sometimes stores media info in objects with url/directPath properties
-            if (val && typeof val.url === 'string' && val.url.startsWith('http')) {
-                return val.url;
-            }
-            if (val && typeof val.directPath === 'string' && val.directPath.startsWith('/')) {
-                return 'https://mmg.whatsapp.net' + val.directPath;
-            }
             return null;
         },
-
+        filterBackgroundUrls(candidates, isVideo) {
+            return candidates;
+        },
         extractVideoUrlFromDOM(el) {
-            // WhatsApp videos often have a direct src that's a blob URL.
-            // We try to find the download button's data or a nearby link.
-            if (el.tagName === 'VIDEO') {
-                // Check for source elements with non-blob src
-                const sources = el.querySelectorAll('source');
-                for (const source of sources) {
-                    if (source.src && !source.src.startsWith('blob:') && !source.src.startsWith('data:')) {
-                        return source.src;
-                    }
-                }
+            if (el && el.tagName && el.tagName.toLowerCase() === 'video') {
+                return el.currentSrc || el.src;
             }
             return null;
         }
     };
 
-    if (typeof window !== 'undefined') {
-        window.ToystallerPlatforms['whatsapp'] = whatsappPlatform;
-    }
+    window.ToystallerPlatforms['whatsapp'] = whatsappPlatform;
+    window.ToystallerPlatform = whatsappPlatform;
+    window.ToystallerActivePlatform = whatsappPlatform;
 })();

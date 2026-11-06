@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Toystaller Global",
   "version": "6.0",
-  "description": "Download and save high-quality images and videos from Instagram, LinkedIn, Facebook, WhatsApp, and more.",
+  "description": "Download and save high-quality images and videos from Instagram, LinkedIn, Facebook, WhatsApp, and more with in-browser anti-redirect HTML5 player.",
   "icons": {
     "16": "icon.png",
     "48": "icon.png",
@@ -10,11 +10,14 @@
   },
   "permissions": [
     "webRequest",
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess",
     "activeTab",
     "scripting",
     "downloads",
     "tabs",
-    "storage"
+    "storage",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -42,6 +45,15 @@
       "run_at": "document_start"
     }
   ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ruleset_1",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
   "web_accessible_resources": [
     {
       "resources": [
@@ -49,7 +61,11 @@
         "platforms/linkedin.js",
         "platforms/facebook.js",
         "platforms/whatsapp.js",
-        "core/interceptor_core.js"
+        "core/interceptor_core.js",
+        "player.html",
+        "player.js",
+        "hls.min.js",
+        "icon.png"
       ],
       "matches": ["<all_urls>"]
     }

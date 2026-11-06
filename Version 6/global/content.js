@@ -13,37 +13,37 @@
         if (host.includes('linkedin.com')) return platforms['linkedin'];
         if (host.includes('facebook.com')) return platforms['facebook'];
         if (host.includes('whatsapp.com')) return platforms['whatsapp'];
-        return null;
+        return platforms['generic'] || null;
     }
 
     const platform = resolveActivePlatform();
     if (platform) {
-        // Set the active platform for content_core.js
         window.ToystallerActivePlatform = platform;
+        window.ToystallerPlatform = platform;
     }
 
-    // Determine which platform scripts to inject into the MAIN world
+    // Only inject the active platform's script into the MAIN world to prevent clashes
+    let activeScript = 'platforms/generic.js';
+    let platformKey = 'generic';
+    if (host.includes('instagram.com')) { activeScript = 'platforms/instagram.js'; platformKey = 'instagram'; }
+    else if (host.includes('linkedin.com')) { activeScript = 'platforms/linkedin.js'; platformKey = 'linkedin'; }
+    else if (host.includes('facebook.com')) { activeScript = 'platforms/facebook.js'; platformKey = 'facebook'; }
+    else if (host.includes('whatsapp.com')) { activeScript = 'platforms/whatsapp.js'; platformKey = 'whatsapp'; }
+
     const platformScripts = [
-        'platforms/instagram.js',
-        'platforms/linkedin.js',
-        'platforms/facebook.js',
-        'platforms/whatsapp.js',
+        activeScript,
         'core/interceptor_core.js'
     ];
 
-    // The global interceptor needs a routing getPlatform() — set up the MAIN-world router
-    // by injecting a router script that sets window.ToystallerPlatform based on hostname
     const routerCode = `
         (function() {
-            const host = window.location.hostname.toLowerCase();
             const platforms = window.ToystallerPlatforms || {};
-            if (host.includes('instagram.com')) window.ToystallerPlatform = platforms['instagram'];
-            else if (host.includes('linkedin.com')) window.ToystallerPlatform = platforms['linkedin'];
-            else if (host.includes('facebook.com')) window.ToystallerPlatform = platforms['facebook'];
-            else if (host.includes('whatsapp.com')) window.ToystallerPlatform = platforms['whatsapp'];
+            if (platforms['${platformKey}']) {
+                window.ToystallerPlatform = platforms['${platformKey}'];
+                window.ToystallerActivePlatform = platforms['${platformKey}'];
+            }
         })();
     `;
 
-    // Boot with platform scripts, then inject the router before interceptor
     bootToystaller(platformScripts, routerCode);
 })();

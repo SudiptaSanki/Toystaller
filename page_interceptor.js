@@ -18,11 +18,15 @@
     ]);
 
     const getPlatform = () => {
+        if (window.ToystallerPlatform) return window.ToystallerPlatform;
+        if (window.ToystallerActivePlatform) return window.ToystallerActivePlatform;
         const host = window.location.hostname.toLowerCase();
-        if (host.includes('facebook.com')) return window.ToystallerPlatforms['facebook'];
-        if (host.includes('instagram.com')) return window.ToystallerPlatforms['instagram'];
-        if (host.includes('linkedin.com')) return window.ToystallerPlatforms['linkedin'];
-        return window.ToystallerPlatforms['generic'];
+        const platforms = window.ToystallerPlatforms || {};
+        if (host.includes('facebook.com') && platforms['facebook']) return platforms['facebook'];
+        if (host.includes('instagram.com') && platforms['instagram']) return platforms['instagram'];
+        if (host.includes('linkedin.com') && platforms['linkedin']) return platforms['linkedin'];
+        if (host.includes('whatsapp.com') && platforms['whatsapp']) return platforms['whatsapp'];
+        return platforms['generic'] || {};
     };
 
     function isValidVideo(url) {

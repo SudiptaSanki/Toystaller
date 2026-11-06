@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Toystaller",
   "version": "6.0",
-  "description": "Smart media downloader with shadow DOM UI and stealth injection.",
+  "description": "All-in-one smart media downloader and in-browser anti-redirect HTML5 player for Instagram, Facebook, LinkedIn, WhatsApp, and more.",
   "icons": {
     "16": "Toystaller_logo.png",
     "48": "Toystaller_logo.png",
@@ -16,7 +16,8 @@
     "scripting",
     "downloads",
     "tabs",
-    "storage"
+    "storage",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -32,6 +33,7 @@
         "platforms/instagram.js",
         "platforms/facebook.js",
         "platforms/linkedin.js",
+        "platforms/whatsapp.js",
         "overlay_manager.js",
         "content_script.js"
       ],
@@ -54,7 +56,12 @@
         "platforms/generic.js",
         "platforms/instagram.js",
         "platforms/facebook.js",
-        "platforms/linkedin.js"
+        "platforms/linkedin.js",
+        "platforms/whatsapp.js",
+        "player.html",
+        "player.js",
+        "hls.min.js",
+        "Toystaller_logo.png"
       ],
       "matches": ["<all_urls>"]
     }

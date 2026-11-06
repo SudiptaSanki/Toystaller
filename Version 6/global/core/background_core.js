@@ -54,7 +54,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         return true;
     } else if (request.action === 'openInNewTab') {
-        chrome.tabs.create({ url: request.url });
+        const url = request.url || '';
+        const platform = request.platform || '';
+        const playerUrl = chrome.runtime.getURL('player.html') + 
+            '?url=' + encodeURIComponent(url) + 
+            (platform ? '&platform=' + encodeURIComponent(platform) : '');
+        chrome.tabs.create({ url: playerUrl });
         sendResponse({ success: true });
     }
     // Platform-specific handlers are added by each extension's background.js

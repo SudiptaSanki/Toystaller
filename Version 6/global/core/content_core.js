@@ -208,15 +208,23 @@ function injectDownloadButtons() {
                 openBtn.addEventListener('click', (e) => {
                     e.preventDefault();
                     e.stopPropagation();
+                    const platformName = platform.name || '';
                     if (!isVideo) {
-                        safeSendMessage({ action: 'openInNewTab', url: getHighResImageUrl() });
+                        safeSendMessage({ 
+                            action: 'openInNewTab', 
+                            url: getHighResImageUrl(), 
+                            isVideo: false, 
+                            platform: platformName 
+                        });
                     } else {
                         getMediaUrl((url) => {
-                            if (platform.useDirectDownload) {
-                                safeSendMessage({ action: 'downloadMedia', url: url });
-                            } else {
-                                safeSendMessage({ action: 'openInNewTab', url: url });
-                            }
+                            if (!url) return;
+                            safeSendMessage({ 
+                                action: 'openInNewTab', 
+                                url: url, 
+                                isVideo: true, 
+                                platform: platformName 
+                            });
                         });
                     }
                 });
