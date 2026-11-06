@@ -34,3 +34,9 @@ Version 5/
 fb_mobile.html
 old_page_interceptor.js
 testRegex.js
+
+# Chrome metadata
+_metadata/
+
+# Legacy/local core
+core/

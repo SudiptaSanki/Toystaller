@@ -1,50 +1,65 @@
 {
   "manifest_version": 3,
-  "name": "Toystaller for Facebook",
-  "version": "6.0",
-  "description": "Download and save high-quality images and videos from Facebook — Reels, Watch, Feed, Stories, and Groups.",
+  "name": "Toystaller: Facebook Edition",
+  "version": "1.0",
+  "description": "Specialized HD media extractor for Facebook — Watch, Reels, Stories, Photos, Feed Posts, Groups, and Profiles.",
   "icons": {
-    "16": "icon.png",
-    "48": "icon.png",
-    "128": "icon.png"
+    "16": "Toystaller_logo.png",
+    "48": "Toystaller_logo.png",
+    "128": "Toystaller_logo.png"
   },
   "permissions": [
     "webRequest",
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess",
     "activeTab",
     "scripting",
     "downloads",
-    "tabs"
+    "tabs",
+    "storage"
   ],
   "host_permissions": [
     "*://*.facebook.com/*",
-    "*://*.fbcdn.net/*"
+    "*://*.fbcdn.net/*",
+    "*://*.fbsbx.com/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background_script.js"
   },
   "content_scripts": [
     {
       "matches": ["*://*.facebook.com/*"],
       "js": [
-        "platform.js",
-        "core/overlay_manager.js",
-        "core/content_core.js",
-        "content.js"
+        "platforms/facebook.js",
+        "overlay_manager.js",
+        "content_script.js"
       ],
       "run_at": "document_start"
     }
   ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ruleset_1",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
   "web_accessible_resources": [
     {
       "resources": [
-        "platform.js",
-        "core/interceptor_core.js"
+        "page_interceptor.js",
+        "platforms/facebook.js",
+        "player.html",
+        "player.js"
       ],
       "matches": ["*://*.facebook.com/*"]
     }
   ],
   "action": {
-    "default_title": "Toystaller for Facebook",
-    "default_icon": "icon.png"
+    "default_title": "Toystaller: Facebook Edition",
+    "default_icon": "Toystaller_logo.png",
+    "default_popup": "popup.html"
   }
 }

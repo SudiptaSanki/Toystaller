@@ -1,6 +1,5 @@
-// core/background_core.js
-// Shared background script logic — network interception, downloads, tab management.
-// Each platform extension imports this and can add platform-specific handlers.
+// background_script.js
+// Listens for media network requests and handles downloads / new-tab opens.
 
 const interceptedMedia = {};
 
@@ -13,18 +12,37 @@ chrome.webRequest.onResponseStarted.addListener(
         if (tabId < 0) return;
 
         const lowerUrl = url.toLowerCase();
-        const isVideo = type === 'media' ||
-                        mediaExtensions.some(ext => lowerUrl.includes(ext)) ||
-                        lowerUrl.includes('mime=video') ||
-                        lowerUrl.includes('/video/');
-        const isImage = type === 'image' || imageExtensions.some(ext => lowerUrl.includes(ext));
+        const isCdn = lowerUrl.includes('fbcdn.net') || lowerUrl.includes('fbsbx.com');
+        if (!isCdn && type !== 'media') return;
+        if (lowerUrl.includes('unified_cvc') || lowerUrl.includes('facebook.com') || lowerUrl.includes('messenger.com')) return;
+
+        const isVideo = (type === 'media' && isCdn) ||
+                        (isCdn && (
+                            mediaExtensions.some(ext => lowerUrl.includes(ext)) ||
+                            lowerUrl.includes('mime=video') ||
+                            lowerUrl.includes('/video/') ||
+                            lowerUrl.includes('/v/t42.') ||
+                            lowerUrl.includes('/v/t64.')
+                        ));
+        const isImage = (type === 'image' && isCdn) || 
+                        (isCdn && (
+                            imageExtensions.some(ext => lowerUrl.includes(ext)) ||
+                            lowerUrl.includes('scontent')
+                        ));
 
         if (isVideo || isImage) {
             if (!interceptedMedia[tabId]) {
                 interceptedMedia[tabId] = { video: new Set(), img: new Set() };
             }
             if (isVideo) {
-                interceptedMedia[tabId].video.add(url);
+                let clean = url.replace(/\\\//g, '/')
+                               .replace(/&amp;/g, '&')
+                               .replace(/\\u0026/g, '&')
+                               .replace(/([?&])bytestart=\d+&?/g, '$1')
+                               .replace(/([?&])byteend=\d+&?/g, '$1')
+                               .replace(/[?&]$/, '')
+                               .trim();
+                interceptedMedia[tabId].video.add(clean);
             } else if (isImage) {
                 interceptedMedia[tabId].img.add(url);
             }
@@ -41,10 +59,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const urls = tabMedia && tabMedia[mediaType] ? Array.from(tabMedia[mediaType]) : [];
         sendResponse({ urls: urls });
     } else if (request.action === 'downloadMedia') {
-        chrome.downloads.download({
+        const downloadOptions = {
             url: request.url,
             saveAs: true
-        }, (downloadId) => {
+        };
+        if (request.filename) {
+            downloadOptions.filename = request.filename;
+        }
+        chrome.downloads.download(downloadOptions, (downloadId) => {
             if (chrome.runtime.lastError) {
                 console.error("Download failed:", chrome.runtime.lastError);
                 sendResponse({ success: false, error: chrome.runtime.lastError.message });
@@ -54,20 +76,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         return true;
     } else if (request.action === 'openInNewTab') {
-        chrome.tabs.create({ url: request.url });
+        const url = request.url || '';
+        const lowerUrl = url.toLowerCase();
+        const isVideo = request.isVideo || 
+                        lowerUrl.includes('.mp4') || 
+                        lowerUrl.includes('.m4v') || 
+                        lowerUrl.includes('.webm') || 
+                        lowerUrl.includes('/video/') || 
+                        lowerUrl.includes('mime=video') ||
+                        lowerUrl.includes('/v/t42.') ||
+                        lowerUrl.includes('/v/t64.');
+        if (isVideo) {
+            const playerUrl = chrome.runtime.getURL('player.html') + '?url=' + encodeURIComponent(url);
+            chrome.tabs.create({ url: playerUrl });
+        } else {
+            chrome.tabs.create({ url: url });
+        }
         sendResponse({ success: true });
     }
-    // Platform-specific handlers are added by each extension's background.js
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     delete interceptedMedia[tabId];
-});
-
-chrome.action.onClicked.addListener((tab) => {
-    if (tab.id > 0) {
-        chrome.tabs.sendMessage(tab.id, { action: 'toggleDashboard' }).catch(err => {
-            console.log("Error sending toggleDashboard to tab:", err);
-        });
-    }
 });

@@ -1,0 +1,40 @@
+# Node/NPM
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Mac
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Editors
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Local version folders
+Version 1/
+Version 2/
+Version 3/
+Version 4/
+Version 5/
+Version 6/
+
+# Browser generated
+_metadata/
+
+# Scratch files
+fb_mobile.html
+old_page_interceptor.js
+testRegex.js

@@ -1,15 +1,190 @@
-// core/interceptor_core.js
-// Runs in the MAIN page world. Intercepts fetch/XHR for CDN video URLs
-// and exposes a React Fiber extractor for accurate per-video URL lookup.
-// Platform-specific behavior is delegated to window.ToystallerPlatform (singular).
+// page_interceptor.js
+// Runs in the MAIN page world (web.whatsapp.com).
+// Features:
+// 1. Intercepts window.URL.createObjectURL to register all decrypted WhatsApp media blobs.
+// 2. Direct browser downloader: triggers anchor-click downloads from the main page context.
+// 3. Media reader: converts decrypted blobs to Base64 Data URLs for dedicated viewer tabs.
+// 4. Intercepts fetch/XHR and React Fiber for media resolution.
 
 (function () {
     'use strict';
     if (window.__toystallerInterceptorLoaded) return;
     window.__toystallerInterceptorLoaded = true;
 
-    // The active platform object — set by the platform's interceptor.js before this file loads.
-    // Falls back to a no-op generic if not set.
+    // --- 1. Blob Interception Registry ---
+    const blobCache = new Map(); // url -> { blob, mimeType, timestamp }
+    const originalCreateObjectURL = window.URL.createObjectURL;
+
+    window.URL.createObjectURL = function (obj) {
+        const url = originalCreateObjectURL.call(this, obj);
+        try {
+            if (obj instanceof Blob) {
+                blobCache.set(url, { blob: obj, mimeType: obj.type, timestamp: Date.now() });
+                // Keep cache bounded to last 60 media items
+                if (blobCache.size > 60) {
+                    const oldestKey = blobCache.keys().next().value;
+                    blobCache.delete(oldestKey);
+                }
+            }
+        } catch (e) {}
+        return url;
+    };
+
+    // Helper: locate active status media directly in the DOM
+    function findActiveStatusMediaDOM() {
+        const statusContainer = document.querySelector(`
+            [data-animate-status-v3="true"],
+            div[data-testid="status-v3-main"],
+            div[data-testid="status-viewer"],
+            div[data-testid="media-viewer"],
+            div[aria-label*="Status" i],
+            div[aria-label*="Story" i],
+            div[role="dialog"]
+        `);
+
+        if (statusContainer) {
+            const video = statusContainer.querySelector('video');
+            if (video && (video.currentSrc || video.src)) return video;
+
+            const imgs = Array.from(statusContainer.querySelectorAll('img'));
+            const validImgs = imgs.filter(img => {
+                const r = img.getBoundingClientRect();
+                return r.width >= 100 && r.height >= 100 && !img.src.includes('avatar') && !img.src.includes('profile');
+            });
+            if (validImgs.length > 0) {
+                return validImgs.sort((a, b) => (b.width * b.height) - (a.width * a.height))[0];
+            }
+        }
+
+        // Global fallback: any visible video
+        const videos = Array.from(document.querySelectorAll('video'));
+        const activeVideo = videos.find(v => {
+            const r = v.getBoundingClientRect();
+            return r.width > 150 && r.height > 150 && (v.currentSrc || v.src);
+        });
+        if (activeVideo) return activeVideo;
+
+        return null;
+    }
+
+    // --- 2. Main-World Media Downloader & Reader ---
+    window.addEventListener('message', async (e) => {
+        if (!e.data || e.data.type !== 'toystaller_main_media_request') return;
+
+        let { action, url, isVideo, filename, requestId } = e.data;
+
+        // If URL wasn't found or is empty, try detecting from active status DOM
+        if (!url) {
+            const activeEl = findActiveStatusMediaDOM();
+            if (activeEl) {
+                url = activeEl.currentSrc || activeEl.src || '';
+                if (activeEl.tagName.toLowerCase() === 'video') isVideo = true;
+            }
+        }
+
+        // Resolve blob object from memory cache or main-world fetch
+        let blob = null;
+        if (url && blobCache.has(url)) {
+            blob = blobCache.get(url).blob;
+        }
+
+        if (!blob && url && (url.startsWith('blob:') || url.startsWith('http'))) {
+            try {
+                const res = await window.fetch(url);
+                blob = await res.blob();
+            } catch (fetchErr) {
+                console.warn('Toystaller: Main-world fetch failed:', fetchErr);
+            }
+        }
+
+        const ext = isVideo ? 'mp4' : 'jpg';
+        const finalFilename = filename || `whatsapp_${isVideo ? 'video' : 'image'}_${Date.now()}.${ext}`;
+
+        // Handler: DIRECT DOWNLOAD
+        if (action === 'download') {
+            try {
+                const downloadUrl = blob ? originalCreateObjectURL.call(window.URL, blob) : url;
+                if (downloadUrl) {
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = downloadUrl;
+                    a.download = finalFilename;
+                    document.body.appendChild(a);
+                    a.click();
+                    setTimeout(() => {
+                        a.remove();
+                        if (blob) window.URL.revokeObjectURL(downloadUrl);
+                    }, 4000);
+
+                    window.postMessage({
+                        type: 'toystaller_main_media_response',
+                        requestId: requestId,
+                        success: true,
+                        action: 'download',
+                        filename: finalFilename
+                    }, '*');
+                    return;
+                }
+            } catch (dlErr) {
+                console.error('Toystaller: Direct download failed:', dlErr);
+            }
+
+            window.postMessage({
+                type: 'toystaller_main_media_response',
+                requestId: requestId,
+                success: false,
+                action: 'download'
+            }, '*');
+            return;
+        }
+
+        // Handler: OPEN IN NEW TAB (convert blob to base64 Data URL)
+        if (action === 'open') {
+            if (blob) {
+                try {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        window.postMessage({
+                            type: 'toystaller_main_media_response',
+                            requestId: requestId,
+                            success: true,
+                            action: 'open',
+                            dataUrl: reader.result,
+                            mimeType: blob.type || (isVideo ? 'video/mp4' : 'image/jpeg'),
+                            isVideo: isVideo,
+                            filename: finalFilename
+                        }, '*');
+                    };
+                    reader.readAsDataURL(blob);
+                    return;
+                } catch (readErr) {
+                    console.error('Toystaller: FileReader error:', readErr);
+                }
+            }
+
+            // Fallback: If blob conversion fails, trigger direct download so user doesn't miss media
+            if (url) {
+                try {
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    a.download = finalFilename;
+                    document.body.appendChild(a);
+                    a.click();
+                    setTimeout(() => a.remove(), 2000);
+                } catch (e2) {}
+            }
+
+            window.postMessage({
+                type: 'toystaller_main_media_response',
+                requestId: requestId,
+                success: false,
+                action: 'open'
+            }, '*');
+        }
+    });
+
+    // --- 3. React Fiber & DOM Extraction ---
     const getPlatform = () => {
         return window.ToystallerPlatform || {
             name: 'generic',
@@ -17,107 +192,11 @@
             looksLikeReactVideo(val) { return val.toLowerCase().includes('.mp4'); },
             looksLikeReactImage(val, key) { return key.toLowerCase().includes('image') || val.toLowerCase().includes('.jpg'); },
             extractPriorityReactUrl() { return null; },
-            extractVideoUrlFromDOM() { return null; },
+            extractVideoUrlFromDOM(el) { return el && (el.currentSrc || el.src); },
             isValidVideo() { return true; },
             getInterceptUrls() { return []; }
         };
     };
-
-    // --- Network Interception: Scan JSON responses for video URLs ---
-
-    function findVideoUrls(obj, found = new Set(), depth = 0) {
-        if (depth > 12 || !obj || typeof obj !== 'object') return found;
-        const platform = getPlatform();
-
-        for (const key of Object.keys(obj)) {
-            const val = obj[key];
-            if (typeof val === 'string') {
-                const isHttp = val.startsWith('https://') || val.startsWith('http://');
-                if (!isHttp || val.includes('blob:')) continue;
-
-                if (platform.shouldSkipReactValue && platform.shouldSkipReactValue(val, key, true)) {
-                    continue;
-                }
-
-                const looksLikeVideo = platform.looksLikeReactVideo && platform.looksLikeReactVideo(val, key);
-                const looksLikeImage = platform.looksLikeReactImage && platform.looksLikeReactImage(val, key);
-
-                if (looksLikeVideo && !looksLikeImage && !val.toLowerCase().includes('bytestart')) {
-                    found.add(val);
-                }
-            } else if (typeof val === 'object') {
-                const platformFound = platform.extractPriorityReactUrl && platform.extractPriorityReactUrl(val, true);
-                if (platformFound) {
-                    found.add(platformFound);
-                }
-                findVideoUrls(val, found, depth + 1);
-            }
-        }
-        return found;
-    }
-
-    function dispatchVideoUrls(urls) {
-        if (!urls || urls.size === 0) return;
-        window.postMessage({
-            type: 'toystaller_video_urls',
-            urls: Array.from(urls)
-        }, '*');
-    }
-
-    // Get the list of URL patterns to intercept from the platform
-    const getInterceptPatterns = () => {
-        const platform = getPlatform();
-        return platform.getInterceptUrls ? platform.getInterceptUrls() : [];
-    };
-
-    const shouldIntercept = (url) => {
-        const patterns = getInterceptPatterns();
-        if (patterns.length === 0) return false;
-        return patterns.some(pattern => url.includes(pattern));
-    };
-
-    // Patch fetch()
-    const originalFetch = window.fetch;
-    window.fetch = async function (...args) {
-        const response = await originalFetch.apply(this, args);
-        try {
-            const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
-            if (shouldIntercept(url)) {
-                const clone = response.clone();
-                clone.json().then(data => {
-                    const foundVideos = findVideoUrls(data);
-                    dispatchVideoUrls(foundVideos);
-                }).catch(() => {});
-            }
-        } catch (e) {}
-        return response;
-    };
-
-    // Patch XMLHttpRequest
-    const OriginalXHR = window.XMLHttpRequest;
-    function PatchedXHR() {
-        const xhr = new OriginalXHR();
-        const originalOpen = xhr.open.bind(xhr);
-        let reqUrl = '';
-        xhr.open = function (method, url, ...rest) {
-            reqUrl = url || '';
-            return originalOpen(method, url, ...rest);
-        };
-        xhr.addEventListener('load', function () {
-            try {
-                if (shouldIntercept(reqUrl)) {
-                    const data = JSON.parse(this.responseText);
-                    const foundVideos = findVideoUrls(data);
-                    dispatchVideoUrls(foundVideos);
-                }
-            } catch (e) {}
-        });
-        return xhr;
-    }
-    PatchedXHR.prototype = OriginalXHR.prototype;
-    window.XMLHttpRequest = PatchedXHR;
-
-    // --- React Fiber Extraction ---
 
     function searchObjForVideoUrl(obj, seen = new Set(), depth = 0, isVideoContext = true) {
         if (depth > 12 || !obj || typeof obj !== 'object') return null;
@@ -184,8 +263,6 @@
 
         return null;
     }
-
-    // --- Message handler for content script requests ---
 
     window.addEventListener('message', (e) => {
         if (!e.data || e.data.type !== 'magic_get_react_url' || !e.data.id) return;

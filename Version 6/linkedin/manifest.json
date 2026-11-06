@@ -1,50 +1,65 @@
 {
   "manifest_version": 3,
-  "name": "Toystaller for LinkedIn",
-  "version": "6.0",
-  "description": "Download and save high-quality images and videos from LinkedIn — Feed, Profiles, and Articles.",
+  "name": "Toystaller: LinkedIn Edition",
+  "version": "1.0",
+  "description": "Specialized HD media extractor for LinkedIn — Feed, Profiles, Articles, Modals, and Messaging with Anti-Redirect HTML5 Player.",
   "icons": {
-    "16": "icon.png",
-    "48": "icon.png",
-    "128": "icon.png"
+    "16": "Toystaller_logo.png",
+    "48": "Toystaller_logo.png",
+    "128": "Toystaller_logo.png"
   },
   "permissions": [
     "webRequest",
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess",
     "activeTab",
     "scripting",
     "downloads",
-    "tabs"
+    "tabs",
+    "storage"
   ],
   "host_permissions": [
     "*://*.linkedin.com/*",
     "*://*.licdn.com/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background_script.js"
   },
   "content_scripts": [
     {
       "matches": ["*://*.linkedin.com/*"],
       "js": [
-        "platform.js",
-        "core/overlay_manager.js",
-        "core/content_core.js",
-        "content.js"
+        "platforms/linkedin.js",
+        "overlay_manager.js",
+        "content_script.js"
       ],
       "run_at": "document_start"
     }
   ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ruleset_1",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
   "web_accessible_resources": [
     {
       "resources": [
-        "platform.js",
-        "core/interceptor_core.js"
+        "page_interceptor.js",
+        "platforms/linkedin.js",
+        "player.html",
+        "player.js",
+        "hls.min.js"
       ],
       "matches": ["*://*.linkedin.com/*"]
     }
   ],
   "action": {
-    "default_title": "Toystaller for LinkedIn",
-    "default_icon": "icon.png"
+    "default_title": "Toystaller: LinkedIn Edition",
+    "default_icon": "Toystaller_logo.png",
+    "default_popup": "popup.html"
   }
 }

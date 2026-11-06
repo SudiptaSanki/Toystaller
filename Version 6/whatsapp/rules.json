@@ -1,0 +1,48 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "Referer",
+          "operation": "set",
+          "value": "https://web.whatsapp.com/"
+        },
+        {
+          "header": "Origin",
+          "operation": "set",
+          "value": "https://web.whatsapp.com"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||whatsapp.net",
+      "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "Referer",
+          "operation": "set",
+          "value": "https://web.whatsapp.com/"
+        },
+        {
+          "header": "Origin",
+          "operation": "set",
+          "value": "https://web.whatsapp.com"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||whatsapp.com",
+      "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
+    }
+  }
+]

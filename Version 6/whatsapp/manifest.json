@@ -1,50 +1,74 @@
 {
   "manifest_version": 3,
-  "name": "Toystaller for WhatsApp",
-  "version": "6.0",
-  "description": "Download and save images and videos from WhatsApp Web — chats, status updates, and media viewer.",
+  "name": "Toystaller: WhatsApp Edition",
+  "version": "1.0",
+  "description": "Specialized HD media downloader for WhatsApp Web — Chat images & videos, Status updates, and Media Lightbox.",
   "icons": {
-    "16": "icon.png",
-    "48": "icon.png",
-    "128": "icon.png"
+    "16": "Toystaller_logo.png",
+    "48": "Toystaller_logo.png",
+    "128": "Toystaller_logo.png"
   },
   "permissions": [
     "webRequest",
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess",
     "activeTab",
     "scripting",
     "downloads",
-    "tabs"
+    "tabs",
+    "storage",
+    "unlimitedStorage"
   ],
   "host_permissions": [
-    "*://*.whatsapp.com/*",
-    "*://*.whatsapp.net/*"
+    "*://web.whatsapp.com/*",
+    "*://*.whatsapp.net/*",
+    "*://*.whatsapp.com/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background_script.js"
   },
   "content_scripts": [
     {
       "matches": ["*://web.whatsapp.com/*"],
+      "js": ["page_interceptor.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["*://web.whatsapp.com/*"],
       "js": [
-        "platform.js",
-        "core/overlay_manager.js",
+        "platforms/whatsapp.js",
+        "overlay_manager.js",
         "core/content_core.js",
-        "content.js"
+        "content_script.js"
       ],
       "run_at": "document_start"
     }
   ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ruleset_1",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
   "web_accessible_resources": [
     {
       "resources": [
-        "platform.js",
-        "core/interceptor_core.js"
+        "page_interceptor.js",
+        "platforms/whatsapp.js",
+        "player.html",
+        "player.js",
+        "Toystaller_logo.png"
       ],
       "matches": ["*://web.whatsapp.com/*"]
     }
   ],
   "action": {
-    "default_title": "Toystaller for WhatsApp",
-    "default_icon": "icon.png"
+    "default_title": "Toystaller: WhatsApp Edition",
+    "default_icon": "Toystaller_logo.png",
+    "default_popup": "popup.html"
   }
 }

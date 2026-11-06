@@ -1,0 +1,48 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "Referer",
+          "operation": "set",
+          "value": "https://www.facebook.com/"
+        },
+        {
+          "header": "Origin",
+          "operation": "set",
+          "value": "https://www.facebook.com"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||fbcdn.net",
+      "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "Referer",
+          "operation": "set",
+          "value": "https://www.facebook.com/"
+        },
+        {
+          "header": "Origin",
+          "operation": "set",
+          "value": "https://www.facebook.com"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||fbsbx.com",
+      "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
+    }
+  }
+]

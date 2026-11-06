@@ -1,8 +1,8 @@
-// core/background_core.js
-// Shared background script logic — network interception, downloads, tab management.
-// Each platform extension imports this and can add platform-specific handlers.
+// background_script.js
+// Toystaller v1.0 (WhatsApp Edition) — Media interception, download dispatcher, and in-browser player routing.
 
 const interceptedMedia = {};
+const viewerMediaCache = new Map();
 
 const mediaExtensions = ['.mp4', '.m3u8', '.webm', '.ogg', '.mov', '.avi', '.mkv', '.flv', '.wmv', '.m4v', '.m4a'];
 const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
@@ -30,7 +30,7 @@ chrome.webRequest.onResponseStarted.addListener(
             }
         }
     },
-    { urls: ["<all_urls>"] }
+    { urls: ["*://web.whatsapp.com/*", "*://*.whatsapp.net/*", "*://*.whatsapp.com/*"] }
 );
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -41,33 +41,89 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const urls = tabMedia && tabMedia[mediaType] ? Array.from(tabMedia[mediaType]) : [];
         sendResponse({ urls: urls });
     } else if (request.action === 'downloadMedia') {
-        chrome.downloads.download({
+        const downloadOptions = {
             url: request.url,
-            saveAs: true
-        }, (downloadId) => {
+            saveAs: request.saveAs !== undefined ? request.saveAs : true
+        };
+        if (request.filename) {
+            downloadOptions.filename = request.filename;
+        }
+
+        chrome.downloads.download(downloadOptions, (downloadId) => {
             if (chrome.runtime.lastError) {
-                console.error("Download failed:", chrome.runtime.lastError);
+                console.error("Toystaller: Download failed:", chrome.runtime.lastError.message);
                 sendResponse({ success: false, error: chrome.runtime.lastError.message });
             } else {
                 sendResponse({ success: true, downloadId: downloadId });
             }
         });
         return true;
+    } else if (request.action === 'createPlayerTab' || request.action === 'createViewerTab') {
+        const id = 'player_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        viewerMediaCache.set(id, {
+            dataUrl: request.dataUrl,
+            url: request.url,
+            buffer: request.buffer,
+            mimeType: request.mimeType,
+            isVideo: request.isVideo !== undefined ? request.isVideo : true,
+            filename: request.filename,
+            timestamp: Date.now()
+        });
+
+        // 120-second automatic garbage collection if tab isn't opened
+        setTimeout(() => {
+            if (viewerMediaCache.has(id)) {
+                viewerMediaCache.delete(id);
+            }
+        }, 120000);
+
+        chrome.tabs.create({ url: chrome.runtime.getURL(`player.html?id=${id}`) }, (tab) => {
+            if (chrome.runtime.lastError) {
+                console.error("Toystaller: Failed to create player tab:", chrome.runtime.lastError.message);
+                sendResponse({ success: false, error: chrome.runtime.lastError.message });
+            } else {
+                sendResponse({ success: true, id: id, tabId: tab ? tab.id : null });
+            }
+        });
+        return true;
+    } else if (request.action === 'getPlayerMedia' || request.action === 'getViewerMedia') {
+        const id = request.id;
+        const media = viewerMediaCache.get(id);
+        if (media) {
+            viewerMediaCache.delete(id);
+            sendResponse(media);
+        } else {
+            sendResponse(null);
+        }
+        return true;
     } else if (request.action === 'openInNewTab') {
-        chrome.tabs.create({ url: request.url });
+        const url = request.url || '';
+        const lowerUrl = url.toLowerCase();
+        const isVideo = request.isVideo || 
+                        lowerUrl.includes('.mp4') || 
+                        lowerUrl.includes('.m4v') || 
+                        lowerUrl.includes('.webm') || 
+                        lowerUrl.includes('/video/') || 
+                        lowerUrl.includes('mime=video');
+
+        if (isVideo) {
+            const playerUrl = chrome.runtime.getURL('player.html') + '?url=' + encodeURIComponent(url);
+            chrome.tabs.create({ url: playerUrl });
+        } else {
+            chrome.tabs.create({ url: url });
+        }
         sendResponse({ success: true });
     }
-    // Platform-specific handlers are added by each extension's background.js
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     delete interceptedMedia[tabId];
 });
 
-chrome.action.onClicked.addListener((tab) => {
-    if (tab.id > 0) {
-        chrome.tabs.sendMessage(tab.id, { action: 'toggleDashboard' }).catch(err => {
-            console.log("Error sending toggleDashboard to tab:", err);
-        });
-    }
-});
+if (chrome.action && chrome.action.onClicked) {
+    chrome.action.onClicked.addListener((tab) => {
+        if (tab && tab.id > 0) {
+            chrome.tabs.sendMessage(tab.id, { action: 'toggleDashboard' }).catch(() => {});
+        }
+    });
+}

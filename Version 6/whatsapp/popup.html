@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 320px;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+    background: #111b21;
+    color: #e9edef;
+    padding: 0;
+    overflow: hidden;
+  }
+  .popup-container {
+    padding: 20px;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .header img {
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(37, 211, 102, 0.25);
+  }
+  .header-text h1 {
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: -0.3px;
+  }
+  .header-text .version {
+    font-size: 11px;
+    color: #25d366;
+    margin-top: 2px;
+    font-weight: 500;
+  }
+
+  .section-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: #8696a0;
+    margin-bottom: 10px;
+    font-weight: 600;
+  }
+
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    background: #202c33;
+    border-radius: 10px;
+    margin-bottom: 8px;
+    transition: background 0.15s ease;
+  }
+  .toggle-row:hover {
+    background: #233138;
+  }
+  .toggle-label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .toggle-label .title {
+    font-size: 13px;
+    font-weight: 500;
+    color: #e9edef;
+  }
+  .toggle-label .desc {
+    font-size: 10.5px;
+    color: #8696a0;
+    line-height: 1.3;
+  }
+
+  /* Toggle Switch */
+  .switch {
+    position: relative;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
+    margin-left: 12px;
+  }
+  .switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: #3b4a54;
+    transition: 0.25s;
+    border-radius: 22px;
+  }
+  .slider:before {
+    position: absolute;
+    content: "";
+    height: 16px;
+    width: 16px;
+    left: 3px;
+    bottom: 3px;
+    background-color: #8696a0;
+    transition: 0.25s;
+    border-radius: 50%;
+  }
+  input:checked + .slider {
+    background-color: #25d366;
+  }
+  input:checked + .slider:before {
+    transform: translateX(18px);
+    background-color: #fff;
+  }
+
+  .status-bar {
+    margin-top: 14px;
+    padding: 10px 14px;
+    background: rgba(37, 211, 102, 0.08);
+    border-radius: 8px;
+    border-left: 3px solid #25d366;
+    font-size: 11px;
+    color: #8696a0;
+    line-height: 1.5;
+  }
+  .status-bar .section-name {
+    color: #25d366;
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+<div class="popup-container">
+
+  <div class="header">
+    <img src="Toystaller_logo.png" alt="Toystaller">
+    <div class="header-text">
+      <h1>Toystaller: WhatsApp Edition</h1>
+      <div class="version">v6.0 — Specialized Media Downloader</div>
+    </div>
+  </div>
+
+  <div class="section-label">Overlay Settings</div>
+
+  <div class="toggle-row">
+    <div class="toggle-label">
+      <span class="title">Show on Chat Media</span>
+      <span class="desc">Overlay download buttons on conversation photos & videos</span>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="toggleChat" checked>
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="toggle-row">
+    <div class="toggle-label">
+      <span class="title">Show on Status Updates</span>
+      <span class="desc">Overlay download buttons on fullscreen status/story viewer</span>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="toggleStatus" checked>
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="toggle-row">
+    <div class="toggle-label">
+      <span class="title">Show on Media Lightbox</span>
+      <span class="desc">Overlay download buttons on opened photo & video viewer</span>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="toggleLightbox" checked>
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="toggle-row">
+    <div class="toggle-label">
+      <span class="title">Show on Contact & Info</span>
+      <span class="desc">Overlay download buttons on contact avatars & media drawer</span>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="toggleProfile" checked>
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="status-bar" id="statusBar">
+    Download or open media directly on <span class="section-name">web.whatsapp.com</span>.
+  </div>
+
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>
