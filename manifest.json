@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Toystaller",
-  "version": "5.0",
+  "version": "6.0",
   "description": "Smart media downloader with shadow DOM UI and stealth injection.",
   "icons": {
     "16": "Toystaller_logo.png",

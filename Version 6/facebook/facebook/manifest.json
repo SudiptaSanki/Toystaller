@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Toystaller: Facebook Edition",
-  "version": "1.0",
+  "version": "6.0",
   "description": "Specialized HD media extractor for Facebook — Watch, Reels, Stories, Photos, Feed Posts, Groups, and Profiles.",
   "icons": {
     "16": "icon.png",

@@ -730,7 +730,7 @@ function toggleDashboardOverlay() {
             
             <div class="dashboard">
                 <div class="header">
-                    <h2>Toystaller v5</h2>
+                    <h2>Toystaller v6</h2>
                     <button class="close-btn" id="closeBtn" title="Close">&times;</button>
                 </div>
                 
