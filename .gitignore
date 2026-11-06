@@ -39,4 +39,4 @@ testRegex.js
 _metadata/
 
 # Legacy/local core
-core/
+/core/

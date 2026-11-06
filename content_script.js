@@ -580,7 +580,7 @@ function scheduleInject() {
 
 // Removed direct calls; handled by bootToystaller()
 
-const defaultAllowed = ['instagram.com', 'linkedin.com'];
+const defaultAllowed = ['instagram.com', 'linkedin.com', 'facebook.com', 'whatsapp.com'];
 const currentHost = window.location.hostname.toLowerCase();
 const isDefault = defaultAllowed.some(s => currentHost.includes(s));
 
@@ -618,7 +618,7 @@ function toggleDashboardOverlay() {
 
     const shadow = dashboardHost.attachShadow({ mode: 'open' });
 
-    chrome.storage.local.get({ globalEnabled: false, allowedSites: ['instagram.com', 'linkedin.com'] }, (result) => {
+    chrome.storage.local.get({ globalEnabled: false, allowedSites: defaultAllowed, openInMainWindow: false }, (result) => {
         const host = window.location.hostname.toLowerCase();
         const isAllowed = result.allowedSites.some(s => host.includes(s));
 
@@ -749,7 +749,7 @@ function toggleDashboardOverlay() {
             
             <div class="dashboard">
                 <div class="header">
-                    <h2>Toystaller v5</h2>
+                    <h2>Toystaller v6</h2>
                     <button class="close-btn" id="closeBtn" title="Close">&times;</button>
                 </div>
                 
@@ -774,6 +774,17 @@ function toggleDashboardOverlay() {
                         <span class="slider"></span>
                     </label>
                 </div>
+
+                <div class="setting-row">
+                    <div class="setting-info">
+                        <h3>Open in Main Window</h3>
+                        <p>Off by default (keeps tabs in current window / incognito)</p>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="jumpMainToggle" ${result.openInMainWindow ? 'checked' : ''}>
+                        <span class="slider"></span>
+                    </label>
+                </div>
                 
                 <button class="btn" id="reloadBtn" style="display: none;">Reload Page to Apply</button>
             </div>
@@ -786,7 +797,7 @@ function toggleDashboardOverlay() {
 
         shadow.getElementById('siteToggle').addEventListener('change', (e) => {
             const checked = e.target.checked;
-            chrome.storage.local.get({ allowedSites: ['instagram.com', 'linkedin.com'] }, (res) => {
+            chrome.storage.local.get({ allowedSites: defaultAllowed }, (res) => {
                 let sites = res.allowedSites;
                 if (checked) {
                     if (!sites.includes(host)) sites.push(host);
@@ -799,6 +810,10 @@ function toggleDashboardOverlay() {
 
         shadow.getElementById('globalToggle').addEventListener('change', (e) => {
             chrome.storage.local.set({ globalEnabled: e.target.checked }, showReload);
+        });
+
+        shadow.getElementById('jumpMainToggle').addEventListener('change', (e) => {
+            chrome.storage.local.set({ openInMainWindow: e.target.checked });
         });
 
         reloadBtn.addEventListener('click', () => window.location.reload());

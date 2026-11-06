@@ -106,13 +106,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         lowerUrl.includes('/video/') || 
                         lowerUrl.includes('mime=video');
 
-        if (isVideo) {
-            const playerUrl = chrome.runtime.getURL('player.html') + '?url=' + encodeURIComponent(url);
-            chrome.tabs.create({ url: playerUrl });
-        } else {
-            chrome.tabs.create({ url: url });
+        const targetUrl = isVideo ? (chrome.runtime.getURL('player.html') + '?url=' + encodeURIComponent(url)) : url;
+        const tabProps = { url: targetUrl };
+        if (sender.tab) {
+            tabProps.windowId = sender.tab.windowId;
+            tabProps.openerTabId = sender.tab.id;
+            tabProps.index = sender.tab.index + 1;
         }
+        chrome.tabs.create(tabProps, (createdTab) => {
+            if (chrome.runtime.lastError) {
+                chrome.tabs.create({ url: targetUrl });
+            }
+        });
         sendResponse({ success: true });
+        return true;
     }
 });
 

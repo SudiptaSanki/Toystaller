@@ -104,13 +104,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             }
         }, 120000);
 
-        chrome.tabs.create({ url: chrome.runtime.getURL(`player.html?id=${id}`) }, (tab) => {
-            if (chrome.runtime.lastError) {
-                console.error("Toystaller: Failed to create player tab:", chrome.runtime.lastError.message);
-                sendResponse({ success: false, error: chrome.runtime.lastError.message });
-            } else {
-                sendResponse({ success: true, id: id, tabId: tab ? tab.id : null });
+        chrome.storage.local.get({ openInMainWindow: false }, (settings) => {
+            const stayInCurrent = !settings.openInMainWindow;
+            const tabProps = { url: chrome.runtime.getURL(`player.html?id=${id}`) };
+
+            if (stayInCurrent && sender.tab) {
+                tabProps.windowId = sender.tab.windowId;
+                tabProps.openerTabId = sender.tab.id;
+                tabProps.index = sender.tab.index + 1;
             }
+
+            chrome.tabs.create(tabProps, (tab) => {
+                if (chrome.runtime.lastError) {
+                    console.error("Toystaller: Failed to create player tab with windowId:", chrome.runtime.lastError.message);
+                    chrome.tabs.create({ url: tabProps.url }, (fallbackTab) => {
+                        sendResponse({ success: true, id: id, tabId: fallbackTab ? fallbackTab.id : null });
+                    });
+                } else {
+                    sendResponse({ success: true, id: id, tabId: tab ? tab.id : null });
+                }
+            });
         });
         return true;
     } else if (request.action === 'getPlayerMedia' || request.action === 'getViewerMedia') {
@@ -143,8 +156,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             '?url=' + encodeURIComponent(url) + 
             (platform ? '&platform=' + encodeURIComponent(platform) : '');
         
-        chrome.tabs.create({ url: playerUrl });
+        // Target the exact window where the click occurred (keeps incognito in incognito!)
+        chrome.storage.local.get({ openInMainWindow: false }, (settings) => {
+            const stayInCurrent = !settings.openInMainWindow;
+            const tabProps = { url: playerUrl };
+
+            if (stayInCurrent && sender.tab) {
+                tabProps.windowId = sender.tab.windowId;
+                tabProps.openerTabId = sender.tab.id;
+                tabProps.index = sender.tab.index + 1;
+            }
+
+            chrome.tabs.create(tabProps, (createdTab) => {
+                if (chrome.runtime.lastError) {
+                    // Fallback without windowId/openerTabId if window was closed or restricted
+                    chrome.tabs.create({ url: playerUrl });
+                }
+            });
+        });
+
         sendResponse({ success: true });
+        return true;
     } else if (request.action === 'fetchMobileFacebookVideo') {
         const urlObj = new URL(request.url);
         urlObj.hostname = 'm.facebook.com';
@@ -202,4 +234,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     delete interceptedMedia[tabId];
+});
+
+chrome.action.onClicked.addListener((tab) => {
+    if (tab && tab.id > 0) {
+        chrome.tabs.sendMessage(tab.id, { action: 'toggleDashboard' }).catch(() => {});
+    }
 });

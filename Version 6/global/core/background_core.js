@@ -59,8 +59,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const playerUrl = chrome.runtime.getURL('player.html') + 
             '?url=' + encodeURIComponent(url) + 
             (platform ? '&platform=' + encodeURIComponent(platform) : '');
-        chrome.tabs.create({ url: playerUrl });
+        
+        chrome.storage.local.get({ openInMainWindow: false }, (settings) => {
+            const stayInCurrent = !settings.openInMainWindow;
+            const tabProps = { url: playerUrl };
+
+            if (stayInCurrent && sender.tab) {
+                tabProps.windowId = sender.tab.windowId;
+                tabProps.openerTabId = sender.tab.id;
+                tabProps.index = sender.tab.index + 1;
+            }
+
+            chrome.tabs.create(tabProps, (createdTab) => {
+                if (chrome.runtime.lastError) {
+                    chrome.tabs.create({ url: playerUrl });
+                }
+            });
+        });
         sendResponse({ success: true });
+        return true;
     }
     // Platform-specific handlers are added by each extension's background.js
 });
