@@ -55,14 +55,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     } else if (request.action === 'openInNewTab') {
         const url = request.url || '';
+        const lowerUrl = url.toLowerCase();
+        const isVideo = request.isVideo !== undefined ? request.isVideo : (
+            lowerUrl.includes('.mp4') || 
+            lowerUrl.includes('.m3u8') ||
+            lowerUrl.includes('.m4v') || 
+            lowerUrl.includes('.webm') || 
+            lowerUrl.includes('/video/') || 
+            lowerUrl.includes('playback') || 
+            lowerUrl.includes('mime=video')
+        );
+
         const platform = request.platform || '';
+        
+        // Check if this media specifically requires the Toystaller anti-hotlink player wrapper
+        const isSpecialVideoPlatform = (
+            platform === 'Facebook' || 
+            platform === 'LinkedIn' || 
+            platform === 'Instagram' || 
+            platform === 'WhatsApp' ||
+            lowerUrl.includes('fbcdn.net') ||
+            lowerUrl.includes('fbsbx.com') ||
+            lowerUrl.includes('licdn.com') ||
+            lowerUrl.includes('cdninstagram.com') ||
+            lowerUrl.includes('whatsapp.net')
+        );
+        const isHlsStream = lowerUrl.includes('.m3u8') || lowerUrl.includes('/manifest/') || lowerUrl.includes('/playlist/');
+
+        const shouldUsePlayer = isVideo && (isSpecialVideoPlatform || isHlsStream || request.forcePlayer);
+
         const playerUrl = chrome.runtime.getURL('player.html') + 
             '?url=' + encodeURIComponent(url) + 
             (platform ? '&platform=' + encodeURIComponent(platform) : '');
         
+        const targetUrl = shouldUsePlayer ? playerUrl : url;
+        
         chrome.storage.local.get({ openInMainWindow: false }, (settings) => {
             const stayInCurrent = !settings.openInMainWindow;
-            const targetUrl = playerUrl;
             const tabProps = { url: targetUrl };
 
             if (stayInCurrent && sender.tab && sender.tab.windowId) {

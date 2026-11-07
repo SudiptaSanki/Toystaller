@@ -220,6 +220,24 @@ function injectDownloadButtons() {
                 const getHighResImageUrl = () => {
                     let finalUrl = media.currentSrc || media.src;
                     
+                    // Amazon high-res attribute lookups
+                    if (media.getAttribute('data-old-hires')) {
+                        finalUrl = media.getAttribute('data-old-hires');
+                    } else if (media.getAttribute('data-a-dynamic-image')) {
+                        try {
+                            const dyn = JSON.parse(media.getAttribute('data-a-dynamic-image'));
+                            const keys = Object.keys(dyn);
+                            if (keys.length > 0) {
+                                const sorted = keys.sort((a, b) => {
+                                    const dimsA = Array.isArray(dyn[a]) ? dyn[a] : [0, 0];
+                                    const dimsB = Array.isArray(dyn[b]) ? dyn[b] : [0, 0];
+                                    return (dimsB[0] * dimsB[1]) - (dimsA[0] * dimsA[1]);
+                                });
+                                if (sorted[0]) finalUrl = sorted[0];
+                            }
+                        } catch (e) {}
+                    }
+
                     if (media.srcset) {
                         const srcsetItems = media.srcset.split(',').map(s => s.trim().split(' '));
                         if (srcsetItems.length > 0) {
@@ -236,6 +254,24 @@ function injectDownloadButtons() {
                     
                     if (finalUrl && finalUrl.includes('media.licdn.com/dms/image')) {
                         finalUrl = finalUrl.replace(/\/(100|200|400|800)\//g, '/1000/');
+                    }
+
+                    // Amazon URL modifier cleanup: converts thumbnail to uncompressed master image
+                    if (finalUrl && (finalUrl.includes('media-amazon.com') || finalUrl.includes('images-amazon.com'))) {
+                        finalUrl = finalUrl.replace(/\._[A-Z0-9_,]+_\./i, '.');
+                    }
+
+                    // Pexels clean original URL (remove downsampling parameters)
+                    if (finalUrl && finalUrl.includes('images.pexels.com')) {
+                        try {
+                            const u = new URL(finalUrl);
+                            u.searchParams.delete('w');
+                            u.searchParams.delete('h');
+                            u.searchParams.delete('dpr');
+                            u.searchParams.delete('fit');
+                            u.searchParams.delete('crop');
+                            finalUrl = u.toString();
+                        } catch (e) {}
                     }
                     
                     // Do not return blob URLs or internal page URLs as images

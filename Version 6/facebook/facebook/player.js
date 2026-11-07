@@ -31,8 +31,12 @@
     });
 
     player.addEventListener('error', () => {
-        resText.textContent = 'Unable to stream directly. Please click "Download Video" above to save the file.';
-        resText.style.color = '#e74c3c';
+        if (videoUrl && !videoUrl.startsWith('blob:') && !videoUrl.startsWith('data:')) {
+            window.location.replace(videoUrl);
+        } else {
+            resText.textContent = 'Unable to stream directly. Please click "Download Video" above to save the file.';
+            resText.style.color = '#e74c3c';
+        }
     });
 
     dlBtn.addEventListener('click', () => {

@@ -264,14 +264,19 @@
                 });
 
                 videoPlayer.addEventListener('error', () => {
-                    if (window.Hls && Hls.isSupported() && !hlsInstance) {
+                    if (window.Hls && Hls.isSupported() && !hlsInstance && (cleanUrl.includes('.m3u8') || cleanUrl.includes('manifest'))) {
                         hlsInstance = new Hls();
                         hlsInstance.loadSource(cleanUrl);
                         hlsInstance.attachMedia(videoPlayer);
                         hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => videoPlayer.play().catch(() => {}));
                     } else {
-                        resText.textContent = 'Unable to stream directly. Click "Download Video" to save.';
-                        resText.style.color = '#ef4444';
+                        console.warn("Toystaller Player: Video failed to stream inside player, redirecting to direct URL:", cleanUrl);
+                        if (cleanUrl && !cleanUrl.startsWith('blob:') && !cleanUrl.startsWith('data:')) {
+                            window.location.replace(cleanUrl);
+                        } else {
+                            resText.textContent = 'Unable to stream directly. Click "Download Video" to save.';
+                            resText.style.color = '#ef4444';
+                        }
                     }
                 });
             }
@@ -294,8 +299,13 @@
                 }
             };
             imageViewer.onerror = () => {
-                resText.textContent = 'Click "Download Image" to save directly.';
-                resText.style.color = '#ef4444';
+                console.warn("Toystaller Player: Host blocked embedding this image, redirecting directly to source:", sourceUrl);
+                if (sourceUrl && !sourceUrl.startsWith('data:')) {
+                    window.location.replace(sourceUrl);
+                } else {
+                    resText.textContent = 'Click "Download Image" to save directly.';
+                    resText.style.color = '#ef4444';
+                }
             };
         }
     }

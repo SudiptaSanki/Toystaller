@@ -158,15 +158,35 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         const platform = request.platform || '';
         
-        // Open inside the Toystaller Player webpage to bypass CDN 403 / anti-hotlink restrictions
+        // Check if this media specifically requires the Toystaller anti-hotlink player wrapper
+        const isSpecialVideoPlatform = (
+            platform === 'Facebook' || 
+            platform === 'LinkedIn' || 
+            platform === 'Instagram' || 
+            platform === 'WhatsApp' ||
+            lowerUrl.includes('fbcdn.net') ||
+            lowerUrl.includes('fbsbx.com') ||
+            lowerUrl.includes('licdn.com') ||
+            lowerUrl.includes('cdninstagram.com') ||
+            lowerUrl.includes('whatsapp.net')
+        );
+        const isHlsStream = lowerUrl.includes('.m3u8') || lowerUrl.includes('/manifest/') || lowerUrl.includes('/playlist/');
+
+        // CRITICAL LOGIC:
+        // Only use player.html for videos that actually require header spoofing/in-browser decoding (anti-hotlink CDNs, HLS).
+        // For ALL images (Amazon, Pexels, Unsplash, Google, etc.) and regular website videos,
+        // directly pop out the raw URL in the new tab. This avoids cross-origin embedding blocks (CORS/CORP) and guarantees 100% display!
+        const shouldUsePlayer = isVideo && (isSpecialVideoPlatform || isHlsStream || request.forcePlayer);
+
         const playerUrl = chrome.runtime.getURL('player.html') + 
             '?url=' + encodeURIComponent(url) + 
             (platform ? '&platform=' + encodeURIComponent(platform) : '');
         
+        const targetUrl = shouldUsePlayer ? playerUrl : url;
+
         // Target the exact window where the click occurred (keeps incognito in incognito!)
         chrome.storage.local.get({ openInMainWindow: false }, (settings) => {
             const stayInCurrent = !settings.openInMainWindow;
-            const targetUrl = playerUrl;
             const tabProps = { url: targetUrl };
 
             if (stayInCurrent && sender.tab && sender.tab.windowId) {
