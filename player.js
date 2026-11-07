@@ -223,11 +223,13 @@
                 hlsInstance.attachMedia(videoPlayer);
 
                 hlsInstance.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
-                    videoPlayer.play().catch(() => {});
-                    if (data && data.levels && data.levels.length > 0) {
-                        const best = data.levels.reduce((p, c) => (c.height > p.height ? c : p), data.levels[0]);
-                        resText.textContent = `${best.width || 'HD'} x ${best.height || '720'} • HD Video`;
+                    // Always lock to the absolute highest quality stream available
+                    if (hlsInstance.levels && hlsInstance.levels.length > 0) {
+                        hlsInstance.currentLevel = hlsInstance.levels.length - 1;
+                        const best = hlsInstance.levels[hlsInstance.levels.length - 1];
+                        resText.textContent = `${best.width || 'HD'} x ${best.height || '1080'} • Master HD Video`;
                     }
+                    videoPlayer.play().catch(() => {});
                 });
 
                 hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {

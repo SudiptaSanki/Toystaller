@@ -78,21 +78,46 @@ function triggerDownload(url) {
 }
 
 function scoreVideoUrl(url) {
+    if (!url || typeof url !== 'string') return -1000;
     let score = 0;
     const lower = url.toLowerCase();
-    if (lower.includes('.mp4') || lower.includes('.m4v')) score += 10;
-    if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('/playlist/') || lower.includes('/manifest/') || lower.includes('stream_type=dash') || lower.includes('dash')) score -= 50;
-    if (lower.includes('bytestart') || lower.includes('byteend')) score -= 50;
-    
-    // Aggressive scoring for HD resolutions
-    if (lower.includes('1080')) score += 20;
-    else if (lower.includes('720')) score += 10;
-    else if (lower.includes('480')) score += 5;
-    else if (lower.includes('360')) score += 2;
-    
+
+    // Base video format recognition
+    if (lower.includes('.mp4') || lower.includes('.m4v') || lower.includes('.webm')) score += 50;
+
+    // Reject / heavily penalize unplayable fragments and manifests
+    if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('/playlist/') || lower.includes('/manifest/') || lower.includes('stream_type=dash') || lower.includes('dash')) score -= 100;
+    if (lower.includes('bytestart') || lower.includes('byteend')) score -= 100;
+
     // Heavily penalize image thumbnails to prevent them being picked as videos
-    if (lower.includes('videocover') || lower.includes('/image/') || lower.includes('.jpg') || lower.includes('.png') || lower.includes('.webp')) {
-        score -= 500;
+    if (lower.includes('videocover') || lower.includes('/image/') || lower.includes('.jpg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('/t15.')) {
+        return -1000;
+    }
+
+    // High resolution detection (strictly prioritize original best quality)
+    if (lower.includes('2160') || lower.includes('4k') || lower.includes('uhd')) score += 150;
+    else if (lower.includes('1440') || lower.includes('2k') || lower.includes('qhd')) score += 120;
+    else if (lower.includes('1080') || lower.includes('fhd') || lower.includes('_1080p')) score += 90;
+    else if (lower.includes('720') || lower.includes('_720p') || lower.includes('hd')) score += 60;
+    else if (lower.includes('480')) score += 20;
+    else if (lower.includes('360')) score -= 15;
+    else if (lower.includes('240') || lower.includes('144')) score -= 40;
+
+    // Quality keywords in URL or query params
+    if (lower.includes('playable_url_quality_hd') || lower.includes('browser_native_hd') || lower.includes('quality=hd') || lower.includes('_hd.mp4') || lower.includes('hd_src') || lower.includes('quality=1080') || lower.includes('quality=original')) {
+        score += 80;
+    }
+    if (lower.includes('master') || lower.includes('source') || lower.includes('progressive') || lower.includes('original')) {
+        score += 50;
+    }
+    if (lower.includes('quality_sd') || lower.includes('quality=sd') || lower.includes('sd_src') || lower.includes('_sd.mp4') || lower.includes('preview')) {
+        score -= 50;
+    }
+
+    // Bitrate / Bandwidth scoring
+    const bwMatch = lower.match(/(?:bitrate|bandwidth|br)[=_](\d+)/);
+    if (bwMatch && bwMatch[1]) {
+        score += Math.min(parseInt(bwMatch[1], 10) / 50000, 60);
     }
 
     score += Math.min(url.length / 100, 5);
@@ -218,12 +243,32 @@ function injectDownloadButtons() {
                 const iconSize = Math.round(16 * scale);
 
                 const getHighResImageUrl = () => {
-                    let finalUrl = media.currentSrc || media.src;
-                    
-                    // Amazon high-res attribute lookups
-                    if (media.getAttribute('data-old-hires')) {
-                        finalUrl = media.getAttribute('data-old-hires');
-                    } else if (media.getAttribute('data-a-dynamic-image')) {
+                    let finalUrl = null;
+
+                    // 1. Check direct high-res HTML5 & eCommerce attributes
+                    const highResAttrs = [
+                        'data-old-hires',
+                        'data-zoom-image',
+                        'data-large_image',
+                        'data-large-image',
+                        'data-original',
+                        'data-orig',
+                        'data-full',
+                        'data-hires',
+                        'data-high-res-src',
+                        'data-full-url',
+                        'data-src'
+                    ];
+                    for (const attr of highResAttrs) {
+                        const val = media.getAttribute && media.getAttribute(attr);
+                        if (val && typeof val === 'string' && val.startsWith('http') && !val.startsWith('data:') && !val.startsWith('blob:')) {
+                            finalUrl = val;
+                            break;
+                        }
+                    }
+
+                    // 2. Check Amazon dynamic image JSON map (contains resolution array [width, height])
+                    if (!finalUrl && media.getAttribute && media.getAttribute('data-a-dynamic-image')) {
                         try {
                             const dyn = JSON.parse(media.getAttribute('data-a-dynamic-image'));
                             const keys = Object.keys(dyn);
@@ -238,31 +283,48 @@ function injectDownloadButtons() {
                         } catch (e) {}
                     }
 
-                    if (media.srcset) {
+                    // 3. Check enclosing anchor: Thumbnails are frequently wrapped in <a href="original.jpg">
+                    if (!finalUrl && media.closest) {
+                        const anchor = media.closest('a');
+                        if (anchor && anchor.href) {
+                            const aHref = anchor.href.trim();
+                            if (/\.(jpe?g|png|webp|avif|gif)(\?.*)?$/i.test(aHref) && !aHref.startsWith('blob:') && !aHref.startsWith('data:')) {
+                                finalUrl = aHref;
+                            }
+                        }
+                    }
+
+                    // 4. Check srcset: Pick the absolute largest candidate
+                    if (!finalUrl && media.srcset) {
                         const srcsetItems = media.srcset.split(',').map(s => s.trim().split(' '));
                         if (srcsetItems.length > 0) {
                             const largest = srcsetItems.sort((a, b) => {
-                                const wA = parseInt(a[1] || '0');
-                                const wB = parseInt(b[1] || '0');
+                                const wA = parseInt(a[1] || '0', 10);
+                                const wB = parseInt(b[1] || '0', 10);
                                 return wB - wA;
                             })[0];
-                            if (largest && largest[0]) {
+                            if (largest && largest[0] && largest[0].startsWith('http')) {
                                 finalUrl = largest[0];
                             }
                         }
                     }
-                    
-                    if (finalUrl && finalUrl.includes('media.licdn.com/dms/image')) {
-                        finalUrl = finalUrl.replace(/\/(100|200|400|800)\//g, '/1000/');
+
+                    // Fallback to currentSrc or src
+                    if (!finalUrl) {
+                        finalUrl = media.currentSrc || media.src;
                     }
 
-                    // Amazon URL modifier cleanup: converts thumbnail to uncompressed master image
-                    if (finalUrl && (finalUrl.includes('media-amazon.com') || finalUrl.includes('images-amazon.com'))) {
+                    if (!finalUrl || typeof finalUrl !== 'string') return null;
+
+                    // 5. Universal De-Compression & Original Master Cleaners across all web platforms:
+
+                    // Amazon: Strip sizing/crop modifiers (e.g. ._AC_SY450_., ._AC_UL320_.) -> uncompressed original
+                    if (finalUrl.includes('media-amazon.com') || finalUrl.includes('images-amazon.com')) {
                         finalUrl = finalUrl.replace(/\._[A-Z0-9_,]+_\./i, '.');
                     }
 
-                    // Pexels clean original URL (remove downsampling parameters)
-                    if (finalUrl && finalUrl.includes('images.pexels.com')) {
+                    // Pexels: Strip downsampling dimensions (w, h, dpr, fit, crop) -> camera original
+                    if (finalUrl.includes('images.pexels.com')) {
                         try {
                             const u = new URL(finalUrl);
                             u.searchParams.delete('w');
@@ -270,18 +332,79 @@ function injectDownloadButtons() {
                             u.searchParams.delete('dpr');
                             u.searchParams.delete('fit');
                             u.searchParams.delete('crop');
+                            u.searchParams.delete('auto');
                             finalUrl = u.toString();
                         } catch (e) {}
                     }
-                    
-                    // Do not return blob URLs or internal page URLs as images
-                    if (finalUrl) {
-                        const lower = finalUrl.toLowerCase();
-                        if (lower.startsWith('blob:') || lower.startsWith('data:')) return null;
-                        if (lower.includes('//www.facebook.com') || lower.includes('//facebook.com')) return null;
-                        if (lower.includes('//www.instagram.com') || lower.includes('//instagram.com')) return null;
+
+                    // Unsplash: Strip downsampling parameters -> maximum raw photo
+                    if (finalUrl.includes('images.unsplash.com')) {
+                        try {
+                            const u = new URL(finalUrl);
+                            u.searchParams.delete('w');
+                            u.searchParams.delete('h');
+                            u.searchParams.delete('fit');
+                            u.searchParams.delete('crop');
+                            u.searchParams.set('q', '100');
+                            finalUrl = u.toString();
+                        } catch (e) {}
                     }
-                    
+
+                    // Twitter / X: Upgrade to original master quality (name=orig)
+                    if (finalUrl.includes('twimg.com')) {
+                        try {
+                            const u = new URL(finalUrl);
+                            if (u.searchParams.has('name')) {
+                                u.searchParams.set('name', 'orig');
+                                finalUrl = u.toString();
+                            } else {
+                                finalUrl = finalUrl.replace(/:(small|medium|large|thumb)$/i, ':orig');
+                            }
+                        } catch (e) {}
+                    }
+
+                    // Reddit: Replace preview with full original image host (i.redd.it)
+                    if (finalUrl.includes('preview.redd.it')) {
+                        try {
+                            const u = new URL(finalUrl);
+                            u.hostname = 'i.redd.it';
+                            u.search = '';
+                            finalUrl = u.toString();
+                        } catch (e) {}
+                    }
+
+                    // Pinterest: Replace /236x/, /474x/, /736x/ with full /originals/
+                    if (finalUrl.includes('pinimg.com')) {
+                        finalUrl = finalUrl.replace(/\/\d+x\//, '/originals/');
+                    }
+
+                    // Google / Blogspot / Photos: Upgrade resize parameters to s0 (unlimited original size)
+                    if (finalUrl.includes('googleusercontent.com') || finalUrl.includes('blogger.com') || finalUrl.includes('ggpht.com')) {
+                        finalUrl = finalUrl.replace(/=(?:w\d+-h\d+|s\d+)(?:-[a-z0-9]+)*/i, '=s0');
+                    }
+
+                    // WordPress uploads: Strip downscaled dimension suffixes (e.g. -300x200.jpg -> .jpg)
+                    if (finalUrl.includes('/wp-content/uploads/')) {
+                        finalUrl = finalUrl.replace(/-\d+x\d+(\.[a-zA-Z0-9]+)$/, '$1');
+                    }
+
+                    // Shopify CDN: Strip size suffixes (e.g. _medium.jpg, _1024x1024.jpg -> .jpg)
+                    if (finalUrl.includes('cdn.shopify.com')) {
+                        finalUrl = finalUrl.replace(/_(?:pico|icon|thumb|small|compact|medium|large|grande|1024x1024|2048x2048)(\.[a-zA-Z0-9]+)$/i, '$1');
+                    }
+
+                    // LinkedIn: Upgrade shrink thumbnail sizes to master
+                    if (finalUrl.includes('media.licdn.com/dms/image')) {
+                        finalUrl = finalUrl.replace(/\/(100|200|400|800)\//g, '/1000/');
+                        finalUrl = finalUrl.replace(/\/shrink_\d+_\d+\//g, '/');
+                    }
+
+                    // Guard: Never return blob, data, or internal page URLs as images
+                    const lower = finalUrl.toLowerCase();
+                    if (lower.startsWith('blob:') || lower.startsWith('data:')) return null;
+                    if (lower.includes('//www.facebook.com') || lower.includes('//facebook.com')) return null;
+                    if (lower.includes('//www.instagram.com') || lower.includes('//instagram.com')) return null;
+
                     return finalUrl;
                 };
 
