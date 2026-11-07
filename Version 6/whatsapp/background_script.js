@@ -77,10 +77,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             }
         }, 120000);
 
-        chrome.tabs.create({ url: chrome.runtime.getURL(`player.html?id=${id}`) }, (tab) => {
+        const tabProps = { url: chrome.runtime.getURL(`player.html?id=${id}`) };
+        if (sender.tab && sender.tab.windowId) {
+            tabProps.windowId = sender.tab.windowId;
+            if (typeof sender.tab.index === 'number') tabProps.index = sender.tab.index + 1;
+        }
+        chrome.tabs.create(tabProps, (tab) => {
             if (chrome.runtime.lastError) {
-                console.error("Toystaller: Failed to create player tab:", chrome.runtime.lastError.message);
-                sendResponse({ success: false, error: chrome.runtime.lastError.message });
+                console.error("Toystaller: Failed to create player tab with windowId:", chrome.runtime.lastError.message);
+                const fallbackProps = { url: request.url || tabProps.url };
+                if (sender.tab && sender.tab.windowId) {
+                    fallbackProps.windowId = sender.tab.windowId;
+                    if (typeof sender.tab.index === 'number') fallbackProps.index = sender.tab.index + 1;
+                }
+                chrome.tabs.create(fallbackProps, (fallbackTab) => {
+                    sendResponse({ success: true, id: id, tabId: fallbackTab ? fallbackTab.id : null });
+                });
             } else {
                 sendResponse({ success: true, id: id, tabId: tab ? tab.id : null });
             }
@@ -108,14 +120,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         const targetUrl = isVideo ? (chrome.runtime.getURL('player.html') + '?url=' + encodeURIComponent(url)) : url;
         const tabProps = { url: targetUrl };
-        if (sender.tab) {
+        if (sender.tab && sender.tab.windowId) {
             tabProps.windowId = sender.tab.windowId;
-            tabProps.openerTabId = sender.tab.id;
-            tabProps.index = sender.tab.index + 1;
+            if (typeof sender.tab.index === 'number') tabProps.index = sender.tab.index + 1;
         }
         chrome.tabs.create(tabProps, (createdTab) => {
             if (chrome.runtime.lastError) {
-                chrome.tabs.create({ url: targetUrl });
+                console.warn("Toystaller: tabs.create failed, falling back to direct url in same window:", chrome.runtime.lastError.message);
+                const fallbackProps = { url: url || targetUrl };
+                if (sender.tab && sender.tab.windowId) {
+                    fallbackProps.windowId = sender.tab.windowId;
+                    if (typeof sender.tab.index === 'number') fallbackProps.index = sender.tab.index + 1;
+                }
+                chrome.tabs.create(fallbackProps);
             }
         });
         sendResponse({ success: true });

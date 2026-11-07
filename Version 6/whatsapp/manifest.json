@@ -3,6 +3,7 @@
   "name": "Toystaller: WhatsApp Edition",
   "version": "6.0",
   "description": "Specialized HD media downloader for WhatsApp Web — Chat images & videos, Status updates, and Media Lightbox.",
+  "incognito": "split",
   "icons": {
     "16": "Toystaller_logo.png",
     "48": "Toystaller_logo.png",

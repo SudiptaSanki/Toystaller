@@ -3,6 +3,7 @@
   "name": "Toystaller for Instagram",
   "version": "6.0",
   "description": "Download and open high-quality images and videos from Instagram — Reels, Stories, Posts, and DMs.",
+  "incognito": "split",
   "icons": {
     "16": "icon.png",
     "48": "icon.png",

@@ -3,6 +3,7 @@
   "name": "Toystaller Global",
   "version": "6.0",
   "description": "Download and save high-quality images and videos from Instagram, LinkedIn, Facebook, WhatsApp, and more with in-browser anti-redirect HTML5 player.",
+  "incognito": "split",
   "icons": {
     "16": "icon.png",
     "48": "icon.png",

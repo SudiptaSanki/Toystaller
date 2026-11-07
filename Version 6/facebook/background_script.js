@@ -88,14 +88,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         lowerUrl.includes('/v/t64.');
         const targetUrl = isVideo ? (chrome.runtime.getURL('player.html') + '?url=' + encodeURIComponent(url)) : url;
         const tabProps = { url: targetUrl };
-        if (sender.tab) {
+        if (sender.tab && sender.tab.windowId) {
             tabProps.windowId = sender.tab.windowId;
-            tabProps.openerTabId = sender.tab.id;
-            tabProps.index = sender.tab.index + 1;
+            if (typeof sender.tab.index === 'number') tabProps.index = sender.tab.index + 1;
         }
         chrome.tabs.create(tabProps, (createdTab) => {
             if (chrome.runtime.lastError) {
-                chrome.tabs.create({ url: targetUrl });
+                console.warn("Toystaller: tabs.create failed, falling back to direct url in same window:", chrome.runtime.lastError.message);
+                const fallbackProps = { url: url || targetUrl };
+                if (sender.tab && sender.tab.windowId) {
+                    fallbackProps.windowId = sender.tab.windowId;
+                    if (typeof sender.tab.index === 'number') fallbackProps.index = sender.tab.index + 1;
+                }
+                chrome.tabs.create(fallbackProps);
             }
         });
         sendResponse({ success: true });

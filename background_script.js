@@ -106,18 +106,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         chrome.storage.local.get({ openInMainWindow: false }, (settings) => {
             const stayInCurrent = !settings.openInMainWindow;
-            const tabProps = { url: chrome.runtime.getURL(`player.html?id=${id}`) };
+            const targetUrl = chrome.runtime.getURL(`player.html?id=${id}`);
+            const tabProps = { url: targetUrl };
 
-            if (stayInCurrent && sender.tab) {
+            if (stayInCurrent && sender.tab && sender.tab.windowId) {
                 tabProps.windowId = sender.tab.windowId;
-                tabProps.openerTabId = sender.tab.id;
-                tabProps.index = sender.tab.index + 1;
+                if (typeof sender.tab.index === 'number') {
+                    tabProps.index = sender.tab.index + 1;
+                }
             }
 
             chrome.tabs.create(tabProps, (tab) => {
                 if (chrome.runtime.lastError) {
                     console.error("Toystaller: Failed to create player tab with windowId:", chrome.runtime.lastError.message);
-                    chrome.tabs.create({ url: tabProps.url }, (fallbackTab) => {
+                    const fallbackProps = { url: request.url || targetUrl };
+                    if (stayInCurrent && sender.tab && sender.tab.windowId) {
+                        fallbackProps.windowId = sender.tab.windowId;
+                        if (typeof sender.tab.index === 'number') fallbackProps.index = sender.tab.index + 1;
+                    }
+                    chrome.tabs.create(fallbackProps, (fallbackTab) => {
                         sendResponse({ success: true, id: id, tabId: fallbackTab ? fallbackTab.id : null });
                     });
                 } else {
@@ -159,18 +166,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // Target the exact window where the click occurred (keeps incognito in incognito!)
         chrome.storage.local.get({ openInMainWindow: false }, (settings) => {
             const stayInCurrent = !settings.openInMainWindow;
-            const tabProps = { url: playerUrl };
+            const targetUrl = playerUrl;
+            const tabProps = { url: targetUrl };
 
-            if (stayInCurrent && sender.tab) {
+            if (stayInCurrent && sender.tab && sender.tab.windowId) {
                 tabProps.windowId = sender.tab.windowId;
-                tabProps.openerTabId = sender.tab.id;
-                tabProps.index = sender.tab.index + 1;
+                if (typeof sender.tab.index === 'number') {
+                    tabProps.index = sender.tab.index + 1;
+                }
             }
 
             chrome.tabs.create(tabProps, (createdTab) => {
                 if (chrome.runtime.lastError) {
-                    // Fallback without windowId/openerTabId if window was closed or restricted
-                    chrome.tabs.create({ url: playerUrl });
+                    console.warn("Toystaller: tabs.create failed with player.html:", chrome.runtime.lastError.message);
+                    // Fallback: stay in the SAME window, using direct media URL if player.html was rejected in incognito
+                    const fallbackProps = { url: url || targetUrl };
+                    if (stayInCurrent && sender.tab && sender.tab.windowId) {
+                        fallbackProps.windowId = sender.tab.windowId;
+                        if (typeof sender.tab.index === 'number') {
+                            fallbackProps.index = sender.tab.index + 1;
+                        }
+                    }
+                    chrome.tabs.create(fallbackProps, (fbTab) => {
+                        if (chrome.runtime.lastError) {
+                            console.error("Toystaller: Fallback tabs.create also failed:", chrome.runtime.lastError.message);
+                        }
+                    });
                 }
             });
         });

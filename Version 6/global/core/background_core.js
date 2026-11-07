@@ -62,17 +62,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         
         chrome.storage.local.get({ openInMainWindow: false }, (settings) => {
             const stayInCurrent = !settings.openInMainWindow;
-            const tabProps = { url: playerUrl };
+            const targetUrl = playerUrl;
+            const tabProps = { url: targetUrl };
 
-            if (stayInCurrent && sender.tab) {
+            if (stayInCurrent && sender.tab && sender.tab.windowId) {
                 tabProps.windowId = sender.tab.windowId;
-                tabProps.openerTabId = sender.tab.id;
-                tabProps.index = sender.tab.index + 1;
+                if (typeof sender.tab.index === 'number') {
+                    tabProps.index = sender.tab.index + 1;
+                }
             }
 
             chrome.tabs.create(tabProps, (createdTab) => {
                 if (chrome.runtime.lastError) {
-                    chrome.tabs.create({ url: playerUrl });
+                    console.warn("Toystaller: tabs.create failed with player.html:", chrome.runtime.lastError.message);
+                    const fallbackProps = { url: url || targetUrl };
+                    if (stayInCurrent && sender.tab && sender.tab.windowId) {
+                        fallbackProps.windowId = sender.tab.windowId;
+                        if (typeof sender.tab.index === 'number') {
+                            fallbackProps.index = sender.tab.index + 1;
+                        }
+                    }
+                    chrome.tabs.create(fallbackProps);
                 }
             });
         });

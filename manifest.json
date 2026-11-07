@@ -3,6 +3,7 @@
   "name": "Toystaller",
   "version": "6.0",
   "description": "All-in-one smart media downloader and in-browser anti-redirect HTML5 player for Instagram, Facebook, LinkedIn, WhatsApp, and more.",
+  "incognito": "split",
   "icons": {
     "16": "Toystaller_logo.png",
     "48": "Toystaller_logo.png",
