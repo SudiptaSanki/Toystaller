@@ -76,11 +76,6 @@
           "header": "Referer",
           "operation": "set",
           "value": "https://www.linkedin.com/"
-        },
-        {
-          "header": "Origin",
-          "operation": "set",
-          "value": "https://www.linkedin.com"
         }
       ]
     },

@@ -12,16 +12,21 @@
     const platformParam = (params.get('platform') || '').toLowerCase();
 
     const videoPlayer = document.getElementById('videoPlayer');
+    const audioPlayer = document.getElementById('audioPlayer');
     const imageViewer = document.getElementById('imageViewer');
     const dlBtn = document.getElementById('dlBtn');
+    const dlAudioBtn = document.getElementById('dlAudioBtn');
     const copyBtn = document.getElementById('copyBtn');
+    const copyAudioBtn = document.getElementById('copyAudioBtn');
     const resText = document.getElementById('resolutionText');
     const formatText = document.getElementById('formatText');
     const shortcutsText = document.getElementById('shortcutsText');
     const brandBadge = document.getElementById('brandBadge');
 
     let activeDownloadUrl = rawUrl ? rawUrl.split('#')[0] : null;
+    let activeAudioUrl = params.get('audioUrl') ? params.get('audioUrl').split('#')[0] : null;
     let activeFilename = `Toystaller_Media_${Date.now()}`;
+    let activeAudioFilename = `Toystaller_Audio_${Date.now()}.mp3`;
     let isVideoMode = true;
     let isHls = false;
     let hlsInstance = null;
@@ -182,6 +187,40 @@
         `;
     }
 
+    function setupAudioControls(audioUrl, detectedPlatform) {
+        if (!audioUrl) return;
+        activeAudioUrl = audioUrl.split('#')[0];
+        const base = (detectedPlatform || platformParam || 'Toystaller').replace(/[^a-zA-Z0-9]/g, '_');
+        activeAudioFilename = `${base}_Audio_${Date.now()}.mp3`;
+
+        if (dlAudioBtn) dlAudioBtn.style.display = 'inline-flex';
+        if (copyAudioBtn) copyAudioBtn.style.display = 'inline-flex';
+
+        if (audioPlayer) {
+            audioPlayer.src = activeAudioUrl;
+            // Synchronize audio playback with videoPlayer
+            videoPlayer.addEventListener('play', () => {
+                audioPlayer.currentTime = videoPlayer.currentTime;
+                audioPlayer.play().catch(() => {});
+            });
+            videoPlayer.addEventListener('pause', () => {
+                audioPlayer.pause();
+            });
+            videoPlayer.addEventListener('seeking', () => {
+                audioPlayer.currentTime = videoPlayer.currentTime;
+            });
+            videoPlayer.addEventListener('volumechange', () => {
+                audioPlayer.volume = videoPlayer.volume;
+                audioPlayer.muted = videoPlayer.muted;
+            });
+            videoPlayer.addEventListener('timeupdate', () => {
+                if (Math.abs(audioPlayer.currentTime - videoPlayer.currentTime) > 0.3) {
+                    audioPlayer.currentTime = videoPlayer.currentTime;
+                }
+            });
+        }
+    }
+
     function setupMediaDisplay(sourceUrl, isVideo, filename, detectedPlatform) {
         activeDownloadUrl = sourceUrl;
         isVideoMode = isVideo;
@@ -196,6 +235,31 @@
             const ext = isVideo ? 'mp4' : 'jpg';
             const base = (detectedPlatform || 'Toystaller').replace(/[^a-zA-Z0-9]/g, '_');
             activeFilename = idMatch ? `${base}_${idMatch[1]}.${ext}` : `${base}_${isVideo ? 'Video' : 'Image'}_${Date.now()}.${ext}`;
+        }
+
+        // Guarantee proper file extension (e.g. for LinkedIn hashed CDN URLs)
+        const expectedExt = isVideo ? '.mp4' : '.jpg';
+        if (!activeFilename.toLowerCase().endsWith(expectedExt) && 
+            !activeFilename.toLowerCase().endsWith('.jpeg') && 
+            !activeFilename.toLowerCase().endsWith('.png') && 
+            !activeFilename.toLowerCase().endsWith('.webp')) {
+            activeFilename += expectedExt;
+        }
+
+        if (activeAudioUrl) {
+            setupAudioControls(activeAudioUrl, detectedPlatform);
+        } else if (isVideo && chrome.runtime && chrome.runtime.sendMessage) {
+            chrome.runtime.sendMessage({ action: 'getMediaUrls', mediaType: 'audio' }, (res) => {
+                if (res && res.audioUrls && res.audioUrls.length > 0) {
+                    setupAudioControls(res.audioUrls[0], detectedPlatform);
+                } else if (res && res.urls && res.urls.length > 0) {
+                    const foundAudio = res.urls.find(u => {
+                        const l = u.toLowerCase();
+                        return l.includes('/v/t42.') || l.includes('mime=audio') || l.includes('stream_type=audio');
+                    });
+                    if (foundAudio) setupAudioControls(foundAudio, detectedPlatform);
+                }
+            });
         }
 
         if (isVideo) {
@@ -272,13 +336,9 @@
                         hlsInstance.attachMedia(videoPlayer);
                         hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => videoPlayer.play().catch(() => {}));
                     } else {
-                        console.warn("Toystaller Player: Video failed to stream inside player, redirecting to direct URL:", cleanUrl);
-                        if (cleanUrl && !cleanUrl.startsWith('blob:') && !cleanUrl.startsWith('data:')) {
-                            window.location.replace(cleanUrl);
-                        } else {
-                            resText.textContent = 'Unable to stream directly. Click "Download Video" to save.';
-                            resText.style.color = '#ef4444';
-                        }
+                        console.warn("Toystaller Player: Direct preview blocked or pending:", cleanUrl);
+                        resText.textContent = 'Preview restricted by host. Click "Download Video" above to save the master MP4 directly.';
+                        resText.style.color = '#ef4444';
                     }
                 });
             }
@@ -301,13 +361,9 @@
                 }
             };
             imageViewer.onerror = () => {
-                console.warn("Toystaller Player: Host blocked embedding this image, redirecting directly to source:", sourceUrl);
-                if (sourceUrl && !sourceUrl.startsWith('data:')) {
-                    window.location.replace(sourceUrl);
-                } else {
-                    resText.textContent = 'Click "Download Image" to save directly.';
-                    resText.style.color = '#ef4444';
-                }
+                console.warn("Toystaller Player: Host blocked embedding this image:", sourceUrl);
+                resText.textContent = 'Preview restricted by host headers. Click "Download Image" to save directly.';
+                resText.style.color = '#ef4444';
             };
         }
     }
@@ -386,6 +442,49 @@
             }, 1800);
         });
     });
+
+    // Copy Audio handler
+    if (copyAudioBtn) {
+        copyAudioBtn.addEventListener('click', () => {
+            if (!activeAudioUrl) return;
+            navigator.clipboard.writeText(activeAudioUrl).then(() => {
+                copyAudioBtn.textContent = 'Audio Copied!';
+                setTimeout(() => {
+                    copyAudioBtn.innerHTML = `
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                        Copy Audio
+                    `;
+                }, 1800);
+            });
+        });
+    }
+
+    // Download Audio handler
+    if (dlAudioBtn) {
+        dlAudioBtn.addEventListener('click', () => {
+            if (!activeAudioUrl) return;
+            chrome.runtime.sendMessage({
+                action: 'downloadMedia',
+                url: activeAudioUrl,
+                filename: activeAudioFilename || `Toystaller_Audio_${Date.now()}.mp3`
+            }, (response) => {
+                if (response && response.success) {
+                    dlAudioBtn.innerHTML = `
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                        Audio Downloading
+                    `;
+                    setTimeout(() => {
+                        dlAudioBtn.innerHTML = `
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                            Download Audio
+                        `;
+                    }, 2500);
+                }
+            });
+        });
+    }
 
     // Keyboard Shortcuts
     window.addEventListener('keydown', (e) => {

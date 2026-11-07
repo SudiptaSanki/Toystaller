@@ -82,6 +82,11 @@ function scoreVideoUrl(url) {
     let score = 0;
     const lower = url.toLowerCase();
 
+    // Strictly penalize and reject audio-only streams (e.g. Facebook /v/t42., mime=audio)
+    if (lower.includes('/v/t42.') || lower.includes('mime=audio') || lower.includes('mime%3daudio') || lower.includes('stream_type=audio') || lower.includes('/audio/') || lower.includes('audio_')) {
+        return -1000;
+    }
+
     // Base video format recognition
     if (lower.includes('.mp4') || lower.includes('.m4v') || lower.includes('.webm')) score += 50;
 
@@ -126,9 +131,10 @@ function scoreVideoUrl(url) {
 
 function pickBestVideoUrl(urls) {
     if (!urls || urls.length === 0) return null;
-    // Strictly filter out DASH fragments which are unplayable in a new tab and cause black screens
+    // Strictly filter out DASH fragments, audio-only streams, and unplayable manifests
     let playable = urls.filter(u => {
         const lower = u.toLowerCase();
+        if (lower.includes('/v/t42.') || lower.includes('mime=audio') || lower.includes('mime%3daudio') || lower.includes('stream_type=audio') || lower.includes('/audio/') || lower.includes('audio_')) return false;
         if (lower.includes('bytestart') || lower.includes('byteend')) return false;
         if (lower.includes('videocover') || lower.includes('/image/') || lower.includes('.jpg') || lower.includes('.png') || lower.includes('.webp')) return false;
         // Reject streaming manifests that cause black screens
@@ -136,15 +142,25 @@ function pickBestVideoUrl(urls) {
         return true;
     });
     if (playable.length === 0) {
-        // If absolutely nothing else is available, fallback to whatever we have (except images)
+        // If absolutely nothing else is available, fallback to whatever we have (except images and audio tracks)
         playable = urls.filter(u => {
             const lower = u.toLowerCase();
-            return !(lower.includes('videocover') || lower.includes('/image/') || lower.includes('.jpg') || lower.includes('.png') || lower.includes('.webp'));
+            return !(lower.includes('videocover') || lower.includes('/image/') || lower.includes('.jpg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('/v/t42.') || lower.includes('mime=audio'));
         });
         if (playable.length === 0) return null;
     }
     const sorted = [...playable].sort((a, b) => scoreVideoUrl(b) - scoreVideoUrl(a));
     return sorted[0];
+}
+
+function pickBestAudioUrl(urls) {
+    if (!urls || urls.length === 0) return null;
+    const audios = urls.filter(u => {
+        const lower = u.toLowerCase();
+        return (lower.includes('/v/t42.') || lower.includes('mime=audio') || lower.includes('mime%3daudio') || lower.includes('stream_type=audio') || lower.includes('/audio/') || lower.includes('audio_')) &&
+               !lower.includes('bytestart') && !lower.includes('manifest');
+    });
+    return audios[0] || null;
 }
 
 function isRawMediaTab() {
@@ -441,11 +457,12 @@ function injectDownloadButtons() {
                             platform: platformName 
                         });
                     } else {
-                        getMediaUrl((url) => {
+                        getMediaUrl((url, audioUrl) => {
                             if (!url) return;
                             safeSendMessage({ 
                                 action: 'openInNewTab', 
                                 url: url, 
+                                audioUrl: audioUrl || null,
                                 isVideo: true, 
                                 platform: platformName 
                             });
@@ -559,10 +576,11 @@ function injectDownloadButtons() {
             // Pre-resolve video URL to conditionally show/hide the blue button
             const preResolveVideoUrl = (openBtn) => {
                 if (!isVideo) return;
-                getMediaUrl((url) => {
+                getMediaUrl((url, audioUrl) => {
                     if (url) {
                         // Cache the resolved URL and show the button
                         openBtn.__resolvedVideoUrl = url;
+                        openBtn.__resolvedAudioUrl = audioUrl || null;
                         openBtn.style.display = 'flex';
                     }
                     // If no URL found, button stays hidden
@@ -579,13 +597,13 @@ function injectDownloadButtons() {
                         resolved = true;
                         window.removeEventListener('message', handler);
                         if (e.data.url) {
-                            callback(e.data.url);
+                            callback(e.data.url, e.data.audioUrl || null);
                         } else {
                             if (window.location.hostname.includes('facebook.com') && isVideo) {
                                 // Fallback for Facebook: attempt mobile site extraction via background script
                                 safeSendMessage({ action: 'fetchMobileFacebookVideo', url: window.location.href }, (response) => {
                                     if (response && response.url) {
-                                        callback(response.url);
+                                        callback(response.url, null);
                                     } else {
                                         getMediaUrlFallback(callback, silent);
                                     }
@@ -623,8 +641,9 @@ function injectDownloadButtons() {
 
                     if (platformVideos.length > 0) {
                         const best = pickBestVideoUrl(platformVideos);
+                        const bestAudio = pickBestAudioUrl(Array.from(pageInterceptedVideoUrls));
                         if (best) {
-                            callback(best);
+                            callback(best, bestAudio);
                             return;
                         }
                     }
@@ -648,8 +667,9 @@ function injectDownloadButtons() {
 
                     if (matches.length > 0) {
                         const best = pickBestVideoUrl(matches);
+                        const bestAudio = pickBestAudioUrl(Array.from(pageInterceptedVideoUrls));
                         if (best) {
-                            callback(best);
+                            callback(best, bestAudio);
                             return;
                         }
                     }
@@ -667,12 +687,12 @@ function injectDownloadButtons() {
                     !media.currentSrc.startsWith('blob:') &&
                     !media.currentSrc.startsWith('data:') &&
                     !isInternalPage(media.currentSrc)) {
-                    callback(media.currentSrc);
+                    callback(media.currentSrc, null);
                     return;
                 }
 
                 if (media.src && !media.src.startsWith('blob:') && !media.src.startsWith('data:') && !isInternalPage(media.src)) {
-                    callback(media.src);
+                    callback(media.src, null);
                     return;
                 }
 
@@ -682,7 +702,7 @@ function injectDownloadButtons() {
                         !sourceTag.src.startsWith('blob:') &&
                         !sourceTag.src.startsWith('data:') &&
                         !isInternalPage(sourceTag.src)) {
-                        callback(sourceTag.src);
+                        callback(sourceTag.src, null);
                         return;
                     }
                 }
@@ -697,8 +717,11 @@ function injectDownloadButtons() {
                         if (filtered && filtered.length > 0) candidates = filtered;
                         
                         const best = pickBestVideoUrl(candidates);
+                        const bestAudio = response.audioUrls && response.audioUrls.length > 0 
+                            ? pickBestAudioUrl(response.audioUrls) 
+                            : (pickBestAudioUrl(response.urls) || (pageInterceptedVideoUrls.size > 0 ? pickBestAudioUrl(Array.from(pageInterceptedVideoUrls)) : null));
                         if (best) {
-                            callback(best);
+                            callback(best, bestAudio);
                             return;
                         }
                     }

@@ -29,6 +29,26 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
         version: 'v6.0',
         specialization: 'Per-page Facebook media extraction — Theater Mode, Watch Player, Reels, Stories, News Feed Posts, Groups, Photo Albums, and Profile Timeline.',
 
+        // --- Audio URL Detector ---
+        isAudio(url) {
+            if (!url || typeof url !== 'string') return false;
+            const lower = url.toLowerCase();
+            return lower.includes('/v/t42.') ||
+                   lower.includes('mime=audio') ||
+                   lower.includes('mime%3daudio') ||
+                   lower.includes('stream_type=audio') ||
+                   lower.includes('/audio/') ||
+                   lower.includes('audio_');
+        },
+
+        isValidAudio(url) {
+            if (!url || typeof url !== 'string') return false;
+            const lower = url.toLowerCase();
+            if (lower.startsWith('blob:') || lower.startsWith('data:')) return false;
+            const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
+            return isCdn && this.isAudio(url);
+        },
+
         // --- Video URL Validator ---
         isValidVideo(url) {
             if (!url || typeof url !== 'string') return false;
@@ -38,6 +58,9 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             if (lower.includes('unified_cvc')) return false;
             if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('stream_type=dash')) return false;
             
+            // Strictly reject audio-only tracks (e.g. /v/t42. or mime=audio)
+            if (this.isAudio(url)) return false;
+
             // Reject image extensions & covers
             if (lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('videocover') || lower.includes('/t15.')) {
                 return false;
@@ -45,7 +68,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
 
             const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
             const isVideoExt = lower.includes('.mp4') || lower.includes('.m4v') || lower.includes('.webm');
-            const isVideoPath = lower.includes('/v/t42.') || lower.includes('/v/t64.') || lower.includes('/video/') || lower.includes('mime=video');
+            const isVideoPath = lower.includes('/v/t64.') || lower.includes('/v/t66.') || lower.includes('/video/') || lower.includes('mime=video');
 
             return isCdn && (isVideoExt || isVideoPath);
         },
@@ -639,6 +662,32 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                     if (valid.length > 0) {
                         valid.sort((a, b) => (b.width || 0) - (a.width || 0));
                         return valid[0].url;
+                    }
+                }
+            }
+            return null;
+        },
+
+        extractPriorityAudioUrl(val) {
+            if (!val || typeof val !== 'object') return null;
+            const audioCandidates = [
+                val.audio_url,
+                val.audioUrl,
+                val.audio_src,
+                val.audio_playback_url
+            ];
+            for (const c of audioCandidates) {
+                if (typeof c === 'string') {
+                    const clean = this.cleanVideoUrl(c);
+                    if (clean && this.isValidAudio(clean)) return clean;
+                }
+            }
+            if (Array.isArray(val.audio_streams) && val.audio_streams.length > 0) {
+                for (const s of val.audio_streams) {
+                    const u = s && (s.url || s.src);
+                    if (typeof u === 'string') {
+                        const clean = this.cleanVideoUrl(u);
+                        if (clean && this.isValidAudio(clean)) return clean;
                     }
                 }
             }

@@ -196,6 +196,39 @@
         return null;
     }
 
+    function searchObjForAudioUrl(obj, seen = new Set(), depth = 0) {
+        if (depth > 12 || !obj || typeof obj !== 'object') return null;
+        if (seen.has(obj)) return null;
+        seen.add(obj);
+
+        const platform = getPlatform();
+
+        if (Array.isArray(obj)) {
+            for (let item of obj) {
+                const res = searchObjForAudioUrl(item, seen, depth + 1);
+                if (res) return res;
+            }
+        } else {
+            if (platform.extractPriorityAudioUrl) {
+                const found = platform.extractPriorityAudioUrl(obj);
+                if (found) return found;
+            }
+            for (let key of Object.keys(obj)) {
+                if (key === 'return' || key === 'sibling' || key === '_owner' || key === 'parent') continue;
+                const val = obj[key];
+                if (typeof val === 'string') {
+                    if (platform.isValidAudio && platform.isValidAudio(val)) {
+                        return val;
+                    }
+                } else if (typeof val === 'object' && val !== null) {
+                    const nested = searchObjForAudioUrl(val, seen, depth + 1);
+                    if (nested) return nested;
+                }
+            }
+        }
+        return null;
+    }
+
     function extractVideoUrlFromReact(el, isVideoContext = true) {
         let current = el;
         const platform = getPlatform();
@@ -218,6 +251,23 @@
         return null;
     }
 
+    function extractAudioUrlFromReact(el) {
+        let current = el;
+        const platform = getPlatform();
+        if (!platform.extractPriorityAudioUrl && !platform.isValidAudio) return null;
+
+        for (let i = 0; i < 12 && current; i++) {
+            const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
+                k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+            if (key && current[key]) {
+                const found = searchObjForAudioUrl(current[key], new Set(), 0);
+                if (found) return found;
+            }
+            current = current.parentElement;
+        }
+        return null;
+    }
+
     // Facebook-specific: Parse relay data from <script> tags to find progressive video URLs
 
     window.addEventListener('message', (e) => {
@@ -227,13 +277,18 @@
         const el = document.querySelector(`[data-magic-id="${id}"]`);
 
         let url = null;
+        let audioUrl = null;
         if (el) {
             url = extractVideoUrlFromReact(el, isVideo);
+            if (isVideo) {
+                audioUrl = extractAudioUrlFromReact(el);
+            }
         }
 
         window.postMessage({
             type: 'magic_response_react_url_' + id,
-            url: url
+            url: url,
+            audioUrl: audioUrl
         }, '*');
     });
 

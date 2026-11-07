@@ -1,127 +1,117 @@
 // player.js
-// Handles video playback and direct download inside the Toystaller Player tab.
-// Supports both direct MP4 streams and HLS adaptive VOD streams via Hls.js and client-side fMP4 assembly.
+// Universal in-browser media player & direct downloader for Toystaller.
+// Supports direct MP4/WebM streams, HLS adaptive streams via Hls.js & client-side fMP4 assembly,
+// and high-res image viewing with Referer/Origin headers intact.
 
 (function() {
     'use strict';
 
     const params = new URLSearchParams(window.location.search);
     const rawUrl = params.get('url');
+    const mediaId = params.get('id');
+    const platformParam = (params.get('platform') || '').toLowerCase();
 
-    const player = document.getElementById('videoPlayer');
+    const videoPlayer = document.getElementById('videoPlayer');
+    const audioPlayer = document.getElementById('audioPlayer');
+    const imageViewer = document.getElementById('imageViewer');
     const dlBtn = document.getElementById('dlBtn');
+    const dlAudioBtn = document.getElementById('dlAudioBtn');
     const copyBtn = document.getElementById('copyBtn');
+    const copyAudioBtn = document.getElementById('copyAudioBtn');
     const resText = document.getElementById('resolutionText');
+    const formatText = document.getElementById('formatText');
+    const shortcutsText = document.getElementById('shortcutsText');
+    const brandBadge = document.getElementById('brandBadge');
 
-    if (!rawUrl) {
-        document.body.innerHTML = `
-            <div style="color:#e4e6eb;font-family:sans-serif;text-align:center;margin-top:25vh;">
-                <h2>No video link specified</h2>
-                <p style="margin-top:10px;color:#8a8d91;">Please close this tab and click the download button on a LinkedIn video.</p>
-            </div>
-        `;
-        return;
-    }
-
-    // Strip any fragment identifier so standard media elements can stream directly
-    const videoUrl = rawUrl.split('#')[0];
-    const isHls = videoUrl.includes('/pl/') || videoUrl.includes('.m3u8') || videoUrl.includes('format=m3u8');
-
+    let activeDownloadUrl = rawUrl ? rawUrl.split('#')[0] : null;
+    let activeAudioUrl = params.get('audioUrl') ? params.get('audioUrl').split('#')[0] : null;
+    let activeFilename = `Toystaller_Media_${Date.now()}`;
+    let activeAudioFilename = `Toystaller_Audio_${Date.now()}.mp3`;
+    let isVideoMode = true;
+    let isHls = false;
     let hlsInstance = null;
 
-    function initPlayer() {
-        if (isHls && window.Hls && Hls.isSupported()) {
-            hlsInstance = new Hls({
-                enableWorker: true,
-                lowLatencyMode: false,
-                backBufferLength: 90
-            });
-
-            hlsInstance.loadSource(videoUrl);
-            hlsInstance.attachMedia(player);
-
-            hlsInstance.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
-                player.play().catch(() => {});
-                if (data && data.levels && data.levels.length > 0) {
-                    const best = data.levels.reduce((p, c) => (c.height > p.height ? c : p), data.levels[0]);
-                    resText.textContent = `${best.width || 'HD'} x ${best.height || '720'} • HD Video`;
-                    resText.style.color = '#8a8d91';
-                }
-            });
-
-            hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
-                if (hlsInstance.levels && hlsInstance.levels[data.level]) {
-                    const l = hlsInstance.levels[data.level];
-                    resText.textContent = `${l.width} x ${l.height} • HD Video`;
-                }
-            });
-
-            hlsInstance.on(Hls.Events.ERROR, (event, data) => {
-                if (data.fatal) {
-                    console.warn('HLS fatal error:', data);
-                    switch (data.type) {
-                        case Hls.ErrorTypes.NETWORK_ERROR:
-                            hlsInstance.startLoad();
-                            break;
-                        case Hls.ErrorTypes.MEDIA_ERROR:
-                            hlsInstance.recoverMediaError();
-                            break;
-                        default:
-                            resText.textContent = 'Unable to stream directly. Please click "Download Video" above to save the file.';
-                            resText.style.color = '#e74c3c';
-                            break;
-                    }
-                }
-            });
+    // Platform theme & badge setup
+    function setupBranding(detectedPlatform) {
+        const p = (detectedPlatform || platformParam || '').toLowerCase();
+        if (p.includes('linkedin') || (activeDownloadUrl && activeDownloadUrl.includes('licdn.com'))) {
+            document.title = 'Toystaller - LinkedIn Video Player';
+            if (brandBadge) {
+                brandBadge.textContent = 'LinkedIn Edition';
+                brandBadge.style.background = '#0a66c2';
+                brandBadge.style.color = '#fff';
+            }
+            if (dlBtn) dlBtn.style.background = '#0a66c2';
+        } else if (p.includes('facebook') || (activeDownloadUrl && (activeDownloadUrl.includes('fbcdn.net') || activeDownloadUrl.includes('fbsbx.com')))) {
+            document.title = 'Toystaller - Facebook Video Player';
+            if (brandBadge) {
+                brandBadge.textContent = 'Facebook Edition';
+                brandBadge.style.background = '#1877f2';
+                brandBadge.style.color = '#fff';
+            }
+            if (dlBtn) dlBtn.style.background = '#1877f2';
+        } else if (p.includes('whatsapp') || (activeDownloadUrl && (activeDownloadUrl.includes('whatsapp.net') || activeDownloadUrl.includes('whatsapp.com')))) {
+            document.title = 'Toystaller - WhatsApp Media Viewer';
+            if (brandBadge) {
+                brandBadge.textContent = 'WhatsApp Edition';
+                brandBadge.style.background = '#25D366';
+                brandBadge.style.color = '#111b21';
+            }
+            if (dlBtn) {
+                dlBtn.style.background = '#25D366';
+                dlBtn.style.color = '#111b21';
+            }
+        } else if (p.includes('instagram') || (activeDownloadUrl && activeDownloadUrl.includes('cdninstagram.com'))) {
+            document.title = 'Toystaller - Instagram Media Viewer';
+            if (brandBadge) {
+                brandBadge.textContent = 'Instagram Edition';
+                brandBadge.style.background = 'linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888)';
+                brandBadge.style.color = '#fff';
+            }
         } else {
-            player.src = videoUrl;
-
-            player.addEventListener('loadedmetadata', () => {
-                if (player.videoWidth && player.videoHeight) {
-                    resText.textContent = `${player.videoWidth} x ${player.videoHeight} • HD MP4`;
-                    resText.style.color = '#8a8d91';
-                }
-            });
-
-            player.addEventListener('error', (e) => {
-                console.warn('Player video error:', player.error, e);
-                // Attempt fallback to Hls if native player failed on unrecognized HLS format
-                if (window.Hls && Hls.isSupported() && !hlsInstance) {
-                    hlsInstance = new Hls();
-                    hlsInstance.loadSource(videoUrl);
-                    hlsInstance.attachMedia(player);
-                    hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => player.play().catch(() => {}));
-                    hlsInstance.on(Hls.Events.ERROR, (evt, d) => {
-                        if (d.fatal) {
-                            resText.textContent = 'Unable to stream directly. Please click "Download Video" above to save the file.';
-                            resText.style.color = '#e74c3c';
-                        }
-                    });
-                } else {
-                    if (videoUrl && !videoUrl.startsWith('blob:') && !videoUrl.startsWith('data:')) {
-                        window.location.replace(videoUrl);
-                    } else {
-                        resText.textContent = 'Unable to stream directly. Please click "Download Video" above to save the file.';
-                        resText.style.color = '#e74c3c';
-                    }
-                }
-            });
+            document.title = 'Toystaller - Media Player';
+            if (brandBadge) {
+                brandBadge.textContent = 'Global Player';
+                brandBadge.style.background = '#4facfe';
+                brandBadge.style.color = '#fff';
+            }
         }
     }
 
-    initPlayer();
+    function showError(msg) {
+        document.body.innerHTML = `
+            <div style="color:#e4e6eb;font-family:sans-serif;text-align:center;margin-top:25vh;padding:20px;">
+                <h2 style="font-size:22px;color:#ef4444;">Unable to Load Media</h2>
+                <p style="margin-top:12px;color:#8a8d91;font-size:14px;max-width:480px;margin-left:auto;margin-right:auto;line-height:1.6;">
+                    ${msg || 'Please close this tab and click the download button on the media element again.'}
+                </p>
+            </div>
+        `;
+    }
+
+    if (!rawUrl && !mediaId) {
+        showError('No media URL or session specified.');
+        return;
+    }
+
+    // Determine media type
+    function detectIsVideo(url) {
+        if (!url) return true;
+        const lower = url.toLowerCase();
+        if (lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('.gif') || lower.includes('.svg')) {
+            return false;
+        }
+        return true;
+    }
 
     // --- HLS Client-Side Fragmented MP4 Assembler ---
-
     async function downloadHlsVideo(playlistUrl, filename, onProgress) {
-        // 1. Fetch playlist
-        const res = await fetch(playlistUrl);
-        const text = await res.text();
+        const masterRes = await fetch(playlistUrl);
+        const masterText = await masterRes.text();
 
         let variantUrl = playlistUrl;
-        // Check if master playlist containing multiple stream levels
-        if (text.includes('#EXT-X-STREAM-INF')) {
-            const lines = text.split('\n').map(l => l.trim());
+        if (masterText.includes('#EXT-X-STREAM-INF')) {
+            const lines = masterText.split('\n').map(l => l.trim());
             let bestBw = -1;
             let bestUri = null;
             for (let i = 0; i < lines.length; i++) {
@@ -142,7 +132,6 @@
             }
         }
 
-        // 2. Fetch chosen quality variant playlist
         const variantRes = await fetch(variantUrl);
         const variantText = await variantRes.text();
         const vLines = variantText.split('\n').map(l => l.trim());
@@ -160,13 +149,11 @@
 
         onProgress(0, segUrls.length + 1);
 
-        // 3. Fetch initialization segment (contains ftyp + moov headers)
         const initRes = await fetch(initUrl);
         const initBuf = await initRes.arrayBuffer();
         const buffers = [initBuf];
         onProgress(1, segUrls.length + 1);
 
-        // 4. Fetch all media segments (contains moof + mdat fragments)
         for (let i = 0; i < segUrls.length; i++) {
             const segRes = await fetch(segUrls[i]);
             const segBuf = await segRes.arrayBuffer();
@@ -174,7 +161,6 @@
             onProgress(i + 2, segUrls.length + 1);
         }
 
-        // 5. Combine buffers into a unified MP4 file
         const blob = new Blob(buffers, { type: 'video/mp4' });
         const blobUrl = URL.createObjectURL(blob);
 
@@ -197,30 +183,225 @@
                 <polyline points="7 10 12 15 17 10"></polyline>
                 <line x1="12" y1="15" x2="12" y2="3"></line>
             </svg>
-            Download Video
+            ${isVideoMode ? 'Download Video' : 'Download Image'}
         `;
     }
 
+    function setupAudioControls(audioUrl, detectedPlatform) {
+        if (!audioUrl) return;
+        activeAudioUrl = audioUrl.split('#')[0];
+        const base = (detectedPlatform || platformParam || 'Toystaller').replace(/[^a-zA-Z0-9]/g, '_');
+        activeAudioFilename = `${base}_Audio_${Date.now()}.mp3`;
+
+        if (dlAudioBtn) dlAudioBtn.style.display = 'inline-flex';
+        if (copyAudioBtn) copyAudioBtn.style.display = 'inline-flex';
+
+        if (audioPlayer) {
+            audioPlayer.src = activeAudioUrl;
+            // Synchronize audio playback with videoPlayer
+            videoPlayer.addEventListener('play', () => {
+                audioPlayer.currentTime = videoPlayer.currentTime;
+                audioPlayer.play().catch(() => {});
+            });
+            videoPlayer.addEventListener('pause', () => {
+                audioPlayer.pause();
+            });
+            videoPlayer.addEventListener('seeking', () => {
+                audioPlayer.currentTime = videoPlayer.currentTime;
+            });
+            videoPlayer.addEventListener('volumechange', () => {
+                audioPlayer.volume = videoPlayer.volume;
+                audioPlayer.muted = videoPlayer.muted;
+            });
+            videoPlayer.addEventListener('timeupdate', () => {
+                if (Math.abs(audioPlayer.currentTime - videoPlayer.currentTime) > 0.3) {
+                    audioPlayer.currentTime = videoPlayer.currentTime;
+                }
+            });
+        }
+    }
+
+    function setupMediaDisplay(sourceUrl, isVideo, filename, detectedPlatform) {
+        activeDownloadUrl = sourceUrl;
+        isVideoMode = isVideo;
+
+        setupBranding(detectedPlatform);
+
+        if (filename) {
+            activeFilename = filename;
+        } else {
+            const idMatch = sourceUrl.match(/\/([a-zA-Z0-9_\-]+)\.(mp4|jpg|jpeg|png|webp)/i) || 
+                            sourceUrl.match(/\/(\d+_[^/?]+)/);
+            const ext = isVideo ? 'mp4' : 'jpg';
+            const base = (detectedPlatform || 'Toystaller').replace(/[^a-zA-Z0-9]/g, '_');
+            activeFilename = idMatch ? `${base}_${idMatch[1]}.${ext}` : `${base}_${isVideo ? 'Video' : 'Image'}_${Date.now()}.${ext}`;
+        }
+
+        // Guarantee proper file extension (e.g. for LinkedIn hashed CDN URLs)
+        const expectedExt = isVideo ? '.mp4' : '.jpg';
+        if (!activeFilename.toLowerCase().endsWith(expectedExt) && 
+            !activeFilename.toLowerCase().endsWith('.jpeg') && 
+            !activeFilename.toLowerCase().endsWith('.png') && 
+            !activeFilename.toLowerCase().endsWith('.webp')) {
+            activeFilename += expectedExt;
+        }
+
+        if (activeAudioUrl) {
+            setupAudioControls(activeAudioUrl, detectedPlatform);
+        } else if (isVideo && chrome.runtime && chrome.runtime.sendMessage) {
+            chrome.runtime.sendMessage({ action: 'getMediaUrls', mediaType: 'audio' }, (res) => {
+                if (res && res.audioUrls && res.audioUrls.length > 0) {
+                    setupAudioControls(res.audioUrls[0], detectedPlatform);
+                } else if (res && res.urls && res.urls.length > 0) {
+                    const foundAudio = res.urls.find(u => {
+                        const l = u.toLowerCase();
+                        return l.includes('/v/t42.') || l.includes('mime=audio') || l.includes('stream_type=audio');
+                    });
+                    if (foundAudio) setupAudioControls(foundAudio, detectedPlatform);
+                }
+            });
+        }
+
+        if (isVideo) {
+            videoPlayer.style.display = 'block';
+            imageViewer.style.display = 'none';
+            if (shortcutsText) shortcutsText.style.display = 'inline-flex';
+            if (formatText) formatText.textContent = 'Direct Master Audio + Video';
+
+            dlBtn.innerHTML = `
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                Download Video
+            `;
+
+            const cleanUrl = sourceUrl.split('#')[0];
+            isHls = cleanUrl.includes('/pl/') || cleanUrl.includes('.m3u8') || cleanUrl.includes('format=m3u8');
+
+            if (isHls && window.Hls && Hls.isSupported()) {
+                hlsInstance = new Hls({
+                    enableWorker: true,
+                    lowLatencyMode: false,
+                    backBufferLength: 90
+                });
+
+                hlsInstance.loadSource(cleanUrl);
+                hlsInstance.attachMedia(videoPlayer);
+
+                hlsInstance.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+                    // Always lock to the absolute highest quality stream available
+                    if (hlsInstance.levels && hlsInstance.levels.length > 0) {
+                        hlsInstance.currentLevel = hlsInstance.levels.length - 1;
+                        const best = hlsInstance.levels[hlsInstance.levels.length - 1];
+                        resText.textContent = `${best.width || 'HD'} x ${best.height || '1080'} • Master HD Video`;
+                    }
+                    videoPlayer.play().catch(() => {});
+                });
+
+                hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
+                    if (hlsInstance.levels && hlsInstance.levels[data.level]) {
+                        const l = hlsInstance.levels[data.level];
+                        resText.textContent = `${l.width} x ${l.height} • HD Video`;
+                    }
+                });
+
+                hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+                    if (data.fatal) {
+                        switch (data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                hlsInstance.startLoad();
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                hlsInstance.recoverMediaError();
+                                break;
+                            default:
+                                resText.textContent = 'Unable to stream directly. Please click "Download Video" above.';
+                                resText.style.color = '#ef4444';
+                                break;
+                        }
+                    }
+                });
+            } else {
+                videoPlayer.src = cleanUrl;
+                videoPlayer.play().catch(() => {});
+
+                videoPlayer.addEventListener('loadedmetadata', () => {
+                    if (videoPlayer.videoWidth && videoPlayer.videoHeight) {
+                        resText.textContent = `${videoPlayer.videoWidth} x ${videoPlayer.videoHeight} • HD MP4`;
+                    }
+                });
+
+                videoPlayer.addEventListener('error', () => {
+                    if (window.Hls && Hls.isSupported() && !hlsInstance && (cleanUrl.includes('.m3u8') || cleanUrl.includes('manifest'))) {
+                        hlsInstance = new Hls();
+                        hlsInstance.loadSource(cleanUrl);
+                        hlsInstance.attachMedia(videoPlayer);
+                        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => videoPlayer.play().catch(() => {}));
+                    } else {
+                        console.warn("Toystaller Player: Direct preview blocked or pending:", cleanUrl);
+                        resText.textContent = 'Preview restricted by host. Click "Download Video" above to save the master MP4 directly.';
+                        resText.style.color = '#ef4444';
+                    }
+                });
+            }
+        } else {
+            // Image Mode
+            videoPlayer.style.display = 'none';
+            imageViewer.style.display = 'block';
+            if (shortcutsText) shortcutsText.style.display = 'none';
+            if (formatText) formatText.textContent = 'High-Resolution Image';
+
+            dlBtn.innerHTML = `
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                Download Image
+            `;
+
+            imageViewer.src = sourceUrl;
+            imageViewer.onload = () => {
+                if (imageViewer.naturalWidth && imageViewer.naturalHeight) {
+                    resText.textContent = `${imageViewer.naturalWidth} x ${imageViewer.naturalHeight} • Master Photo`;
+                }
+            };
+            imageViewer.onerror = () => {
+                console.warn("Toystaller Player: Host blocked embedding this image:", sourceUrl);
+                resText.textContent = 'Preview restricted by host headers. Click "Download Image" to save directly.';
+                resText.style.color = '#ef4444';
+            };
+        }
+    }
+
+    // Initialize with direct URL or cached session ID
+    if (rawUrl) {
+        const isVid = detectIsVideo(rawUrl);
+        setupMediaDisplay(rawUrl, isVid, null, platformParam);
+    } else if (mediaId) {
+        chrome.runtime.sendMessage({ action: 'getPlayerMedia', id: mediaId }, (response) => {
+            if (response && (response.url || response.dataUrl)) {
+                setupMediaDisplay(response.dataUrl || response.url, response.isVideo !== false, response.filename, response.platform || 'WhatsApp');
+            } else {
+                showError('Media session expired or not found. Please click the button on the media element again.');
+            }
+        });
+    }
+
+    // Download Button handler
     dlBtn.addEventListener('click', () => {
-        const idMatch = videoUrl.match(/\/([a-zA-Z0-9_\-]+)\.mp4/i) || videoUrl.match(/\/(\d+_[^/?]+)/) || videoUrl.match(/\/vid\/(?:pl\/)?(?:v\d+\/)?([a-zA-Z0-9_\-]+)/);
-        const filename = idMatch ? `LinkedIn_${idMatch[1]}.mp4` : `LinkedIn_Video_${Date.now()}.mp4`;
+        if (!activeDownloadUrl) return;
 
         if (isHls) {
             dlBtn.disabled = true;
             dlBtn.textContent = 'Preparing download...';
 
-            downloadHlsVideo(videoUrl, filename, (curr, total) => {
+            downloadHlsVideo(activeDownloadUrl, activeFilename, (curr, total) => {
                 const pct = Math.round((curr / total) * 100);
                 dlBtn.textContent = `Downloading ${pct}%...`;
             }).then(() => {
                 dlBtn.textContent = 'Download Complete!';
                 setTimeout(restoreDlBtn, 2500);
             }).catch((err) => {
-                console.warn('HLS client-side assembly fallback:', err);
+                console.warn('HLS client assembly fallback:', err);
                 chrome.runtime.sendMessage({
                     action: 'downloadMedia',
-                    url: videoUrl,
-                    filename: filename
+                    url: activeDownloadUrl,
+                    filename: activeFilename
                 }, () => {
                     dlBtn.textContent = 'Download Started';
                     setTimeout(restoreDlBtn, 2500);
@@ -229,8 +410,8 @@
         } else {
             chrome.runtime.sendMessage({
                 action: 'downloadMedia',
-                url: videoUrl,
-                filename: filename
+                url: activeDownloadUrl,
+                filename: activeFilename
             }, (response) => {
                 if (response && response.success) {
                     dlBtn.innerHTML = `
@@ -245,8 +426,10 @@
         }
     });
 
+    // Copy Link handler
     copyBtn.addEventListener('click', () => {
-        navigator.clipboard.writeText(videoUrl).then(() => {
+        if (!activeDownloadUrl) return;
+        navigator.clipboard.writeText(activeDownloadUrl).then(() => {
             copyBtn.textContent = 'Copied!';
             setTimeout(() => {
                 copyBtn.innerHTML = `
@@ -259,4 +442,73 @@
             }, 1800);
         });
     });
+
+    // Copy Audio handler
+    if (copyAudioBtn) {
+        copyAudioBtn.addEventListener('click', () => {
+            if (!activeAudioUrl) return;
+            navigator.clipboard.writeText(activeAudioUrl).then(() => {
+                copyAudioBtn.textContent = 'Audio Copied!';
+                setTimeout(() => {
+                    copyAudioBtn.innerHTML = `
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                        Copy Audio
+                    `;
+                }, 1800);
+            });
+        });
+    }
+
+    // Download Audio handler
+    if (dlAudioBtn) {
+        dlAudioBtn.addEventListener('click', () => {
+            if (!activeAudioUrl) return;
+            chrome.runtime.sendMessage({
+                action: 'downloadMedia',
+                url: activeAudioUrl,
+                filename: activeAudioFilename || `Toystaller_Audio_${Date.now()}.mp3`
+            }, (response) => {
+                if (response && response.success) {
+                    dlAudioBtn.innerHTML = `
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                        Audio Downloading
+                    `;
+                    setTimeout(() => {
+                        dlAudioBtn.innerHTML = `
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                            Download Audio
+                        `;
+                    }, 2500);
+                }
+            });
+        });
+    }
+
+    // Keyboard Shortcuts
+    window.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+        if (e.code === 'Space' && isVideoMode) {
+            e.preventDefault();
+            if (videoPlayer.paused) {
+                videoPlayer.play();
+            } else {
+                videoPlayer.pause();
+            }
+        } else if (e.key === 'm' || e.key === 'M') {
+            if (isVideoMode) {
+                videoPlayer.muted = !videoPlayer.muted;
+            }
+        } else if (e.key === 'f' || e.key === 'F') {
+            const targetEl = isVideoMode ? videoPlayer : imageViewer;
+            if (!document.fullscreenElement) {
+                if (targetEl.requestFullscreen) targetEl.requestFullscreen().catch(() => {});
+            } else {
+                if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+            }
+        }
+    });
 })();
+

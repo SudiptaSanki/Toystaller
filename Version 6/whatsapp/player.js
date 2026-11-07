@@ -1,56 +1,268 @@
 // player.js
-// Anti-Redirect In-Browser HTML5 Player & Image Viewer for Toystaller: WhatsApp Edition
-// Bypasses CDN 302 redirects by loading media natively inside an HTML5 <video> / <img> element with Referer/Origin rules.
-// Supports direct CDN URLs (?url=...) and client-decrypted blob sessions (?id=...).
+// Universal in-browser media player & direct downloader for Toystaller.
+// Supports direct MP4/WebM streams, HLS adaptive streams via Hls.js & client-side fMP4 assembly,
+// and high-res image viewing with Referer/Origin headers intact.
 
 (function() {
     'use strict';
 
     const params = new URLSearchParams(window.location.search);
-    const videoUrl = params.get('url');
+    const rawUrl = params.get('url');
     const mediaId = params.get('id');
+    const platformParam = (params.get('platform') || '').toLowerCase();
 
     const videoPlayer = document.getElementById('videoPlayer');
+    const audioPlayer = document.getElementById('audioPlayer');
     const imageViewer = document.getElementById('imageViewer');
     const dlBtn = document.getElementById('dlBtn');
+    const dlAudioBtn = document.getElementById('dlAudioBtn');
     const copyBtn = document.getElementById('copyBtn');
+    const copyAudioBtn = document.getElementById('copyAudioBtn');
     const resText = document.getElementById('resolutionText');
     const formatText = document.getElementById('formatText');
     const shortcutsText = document.getElementById('shortcutsText');
+    const brandBadge = document.getElementById('brandBadge');
 
-    let activeDownloadUrl = videoUrl;
-    let activeFilename = `WhatsApp_Media_${Date.now()}`;
+    let activeDownloadUrl = rawUrl ? rawUrl.split('#')[0] : null;
+    let activeAudioUrl = params.get('audioUrl') ? params.get('audioUrl').split('#')[0] : null;
+    let activeFilename = `Toystaller_Media_${Date.now()}`;
+    let activeAudioFilename = `Toystaller_Audio_${Date.now()}.mp3`;
     let isVideoMode = true;
+    let isHls = false;
+    let hlsInstance = null;
+
+    // Platform theme & badge setup
+    function setupBranding(detectedPlatform) {
+        const p = (detectedPlatform || platformParam || '').toLowerCase();
+        if (p.includes('linkedin') || (activeDownloadUrl && activeDownloadUrl.includes('licdn.com'))) {
+            document.title = 'Toystaller - LinkedIn Video Player';
+            if (brandBadge) {
+                brandBadge.textContent = 'LinkedIn Edition';
+                brandBadge.style.background = '#0a66c2';
+                brandBadge.style.color = '#fff';
+            }
+            if (dlBtn) dlBtn.style.background = '#0a66c2';
+        } else if (p.includes('facebook') || (activeDownloadUrl && (activeDownloadUrl.includes('fbcdn.net') || activeDownloadUrl.includes('fbsbx.com')))) {
+            document.title = 'Toystaller - Facebook Video Player';
+            if (brandBadge) {
+                brandBadge.textContent = 'Facebook Edition';
+                brandBadge.style.background = '#1877f2';
+                brandBadge.style.color = '#fff';
+            }
+            if (dlBtn) dlBtn.style.background = '#1877f2';
+        } else if (p.includes('whatsapp') || (activeDownloadUrl && (activeDownloadUrl.includes('whatsapp.net') || activeDownloadUrl.includes('whatsapp.com')))) {
+            document.title = 'Toystaller - WhatsApp Media Viewer';
+            if (brandBadge) {
+                brandBadge.textContent = 'WhatsApp Edition';
+                brandBadge.style.background = '#25D366';
+                brandBadge.style.color = '#111b21';
+            }
+            if (dlBtn) {
+                dlBtn.style.background = '#25D366';
+                dlBtn.style.color = '#111b21';
+            }
+        } else if (p.includes('instagram') || (activeDownloadUrl && activeDownloadUrl.includes('cdninstagram.com'))) {
+            document.title = 'Toystaller - Instagram Media Viewer';
+            if (brandBadge) {
+                brandBadge.textContent = 'Instagram Edition';
+                brandBadge.style.background = 'linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888)';
+                brandBadge.style.color = '#fff';
+            }
+        } else {
+            document.title = 'Toystaller - Media Player';
+            if (brandBadge) {
+                brandBadge.textContent = 'Global Player';
+                brandBadge.style.background = '#4facfe';
+                brandBadge.style.color = '#fff';
+            }
+        }
+    }
 
     function showError(msg) {
         document.body.innerHTML = `
-            <div style="color:#e9edef;font-family:-apple-system,BlinkMacSystemFont,sans-serif;text-align:center;margin-top:25vh;padding:20px;">
-                <h2 style="font-size:20px;color:#ef4444;">Unable to Load Media</h2>
-                <p style="margin-top:12px;color:#8696a0;font-size:14px;max-width:480px;margin-left:auto;margin-right:auto;line-height:1.6;">
-                    ${msg || 'Please close this tab, make sure the media has loaded or started playing on WhatsApp Web, and click the button again.'}
+            <div style="color:#e4e6eb;font-family:sans-serif;text-align:center;margin-top:25vh;padding:20px;">
+                <h2 style="font-size:22px;color:#ef4444;">Unable to Load Media</h2>
+                <p style="margin-top:12px;color:#8a8d91;font-size:14px;max-width:480px;margin-left:auto;margin-right:auto;line-height:1.6;">
+                    ${msg || 'Please close this tab and click the download button on the media element again.'}
                 </p>
             </div>
         `;
     }
 
-    if (!videoUrl && !mediaId) {
-        showError('No media link or session specified.');
+    if (!rawUrl && !mediaId) {
+        showError('No media URL or session specified.');
         return;
     }
 
-    function setupMediaDisplay(sourceUrl, isVideo, filename) {
+    // Determine media type
+    function detectIsVideo(url) {
+        if (!url) return true;
+        const lower = url.toLowerCase();
+        if (lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('.gif') || lower.includes('.svg')) {
+            return false;
+        }
+        return true;
+    }
+
+    // --- HLS Client-Side Fragmented MP4 Assembler ---
+    async function downloadHlsVideo(playlistUrl, filename, onProgress) {
+        const masterRes = await fetch(playlistUrl);
+        const masterText = await masterRes.text();
+
+        let variantUrl = playlistUrl;
+        if (masterText.includes('#EXT-X-STREAM-INF')) {
+            const lines = masterText.split('\n').map(l => l.trim());
+            let bestBw = -1;
+            let bestUri = null;
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith('#EXT-X-STREAM-INF')) {
+                    const bwMatch = lines[i].match(/BANDWIDTH=(\d+)/);
+                    const bw = bwMatch ? parseInt(bwMatch[1], 10) : 0;
+                    const nextUri = lines[i + 1];
+                    if (nextUri && !nextUri.startsWith('#')) {
+                        if (bw > bestBw || !bestUri) {
+                            bestBw = bw;
+                            bestUri = nextUri;
+                        }
+                    }
+                }
+            }
+            if (bestUri) {
+                variantUrl = new URL(bestUri, playlistUrl).href;
+            }
+        }
+
+        const variantRes = await fetch(variantUrl);
+        const variantText = await variantRes.text();
+        const vLines = variantText.split('\n').map(l => l.trim());
+
+        const mapLine = vLines.find(l => l.startsWith('#EXT-X-MAP:URI='));
+        if (!mapLine) {
+            throw new Error('Playlist missing fMP4 initialization segment');
+        }
+        const initMatch = mapLine.match(/URI=["']?([^"']+)["']?/);
+        const initUrl = new URL(initMatch[1], variantUrl).href;
+
+        const segUrls = vLines
+            .filter(l => l && !l.startsWith('#'))
+            .map(l => new URL(l, variantUrl).href);
+
+        onProgress(0, segUrls.length + 1);
+
+        const initRes = await fetch(initUrl);
+        const initBuf = await initRes.arrayBuffer();
+        const buffers = [initBuf];
+        onProgress(1, segUrls.length + 1);
+
+        for (let i = 0; i < segUrls.length; i++) {
+            const segRes = await fetch(segUrls[i]);
+            const segBuf = await segRes.arrayBuffer();
+            buffers.push(segBuf);
+            onProgress(i + 2, segUrls.length + 1);
+        }
+
+        const blob = new Blob(buffers, { type: 'video/mp4' });
+        const blobUrl = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            a.remove();
+            URL.revokeObjectURL(blobUrl);
+        }, 15000);
+    }
+
+    function restoreDlBtn() {
+        dlBtn.disabled = false;
+        dlBtn.innerHTML = `
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            ${isVideoMode ? 'Download Video' : 'Download Image'}
+        `;
+    }
+
+    function setupAudioControls(audioUrl, detectedPlatform) {
+        if (!audioUrl) return;
+        activeAudioUrl = audioUrl.split('#')[0];
+        const base = (detectedPlatform || platformParam || 'Toystaller').replace(/[^a-zA-Z0-9]/g, '_');
+        activeAudioFilename = `${base}_Audio_${Date.now()}.mp3`;
+
+        if (dlAudioBtn) dlAudioBtn.style.display = 'inline-flex';
+        if (copyAudioBtn) copyAudioBtn.style.display = 'inline-flex';
+
+        if (audioPlayer) {
+            audioPlayer.src = activeAudioUrl;
+            // Synchronize audio playback with videoPlayer
+            videoPlayer.addEventListener('play', () => {
+                audioPlayer.currentTime = videoPlayer.currentTime;
+                audioPlayer.play().catch(() => {});
+            });
+            videoPlayer.addEventListener('pause', () => {
+                audioPlayer.pause();
+            });
+            videoPlayer.addEventListener('seeking', () => {
+                audioPlayer.currentTime = videoPlayer.currentTime;
+            });
+            videoPlayer.addEventListener('volumechange', () => {
+                audioPlayer.volume = videoPlayer.volume;
+                audioPlayer.muted = videoPlayer.muted;
+            });
+            videoPlayer.addEventListener('timeupdate', () => {
+                if (Math.abs(audioPlayer.currentTime - videoPlayer.currentTime) > 0.3) {
+                    audioPlayer.currentTime = videoPlayer.currentTime;
+                }
+            });
+        }
+    }
+
+    function setupMediaDisplay(sourceUrl, isVideo, filename, detectedPlatform) {
         activeDownloadUrl = sourceUrl;
         isVideoMode = isVideo;
+
+        setupBranding(detectedPlatform);
 
         if (filename) {
             activeFilename = filename;
         } else {
+            const idMatch = sourceUrl.match(/\/([a-zA-Z0-9_\-]+)\.(mp4|jpg|jpeg|png|webp)/i) || 
+                            sourceUrl.match(/\/(\d+_[^/?]+)/);
             const ext = isVideo ? 'mp4' : 'jpg';
-            activeFilename = `WhatsApp_${isVideo ? 'Video' : 'Image'}_${Date.now()}.${ext}`;
+            const base = (detectedPlatform || 'Toystaller').replace(/[^a-zA-Z0-9]/g, '_');
+            activeFilename = idMatch ? `${base}_${idMatch[1]}.${ext}` : `${base}_${isVideo ? 'Video' : 'Image'}_${Date.now()}.${ext}`;
+        }
+
+        // Guarantee proper file extension (e.g. for LinkedIn hashed CDN URLs)
+        const expectedExt = isVideo ? '.mp4' : '.jpg';
+        if (!activeFilename.toLowerCase().endsWith(expectedExt) && 
+            !activeFilename.toLowerCase().endsWith('.jpeg') && 
+            !activeFilename.toLowerCase().endsWith('.png') && 
+            !activeFilename.toLowerCase().endsWith('.webp')) {
+            activeFilename += expectedExt;
+        }
+
+        if (activeAudioUrl) {
+            setupAudioControls(activeAudioUrl, detectedPlatform);
+        } else if (isVideo && chrome.runtime && chrome.runtime.sendMessage) {
+            chrome.runtime.sendMessage({ action: 'getMediaUrls', mediaType: 'audio' }, (res) => {
+                if (res && res.audioUrls && res.audioUrls.length > 0) {
+                    setupAudioControls(res.audioUrls[0], detectedPlatform);
+                } else if (res && res.urls && res.urls.length > 0) {
+                    const foundAudio = res.urls.find(u => {
+                        const l = u.toLowerCase();
+                        return l.includes('/v/t42.') || l.includes('mime=audio') || l.includes('stream_type=audio');
+                    });
+                    if (foundAudio) setupAudioControls(foundAudio, detectedPlatform);
+                }
+            });
         }
 
         if (isVideo) {
-            document.title = 'Toystaller - WhatsApp Video Player';
             videoPlayer.style.display = 'block';
             imageViewer.style.display = 'none';
             if (shortcutsText) shortcutsText.style.display = 'inline-flex';
@@ -61,25 +273,81 @@
                 Download Video
             `;
 
-            videoPlayer.src = sourceUrl;
-            videoPlayer.play().catch(() => {});
+            const cleanUrl = sourceUrl.split('#')[0];
+            isHls = cleanUrl.includes('/pl/') || cleanUrl.includes('.m3u8') || cleanUrl.includes('format=m3u8');
 
-            videoPlayer.addEventListener('loadedmetadata', () => {
-                if (videoPlayer.videoWidth && videoPlayer.videoHeight) {
-                    resText.textContent = `${videoPlayer.videoWidth} x ${videoPlayer.videoHeight} • HD MP4`;
-                }
-            });
+            if (isHls && window.Hls && Hls.isSupported()) {
+                hlsInstance = new Hls({
+                    enableWorker: true,
+                    lowLatencyMode: false,
+                    backBufferLength: 90
+                });
 
-            videoPlayer.addEventListener('error', () => {
-                resText.textContent = 'Playback error. Click "Download Video" above to save the file.';
-                resText.style.color = '#ef4444';
-            });
+                hlsInstance.loadSource(cleanUrl);
+                hlsInstance.attachMedia(videoPlayer);
+
+                hlsInstance.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+                    // Always lock to the absolute highest quality stream available
+                    if (hlsInstance.levels && hlsInstance.levels.length > 0) {
+                        hlsInstance.currentLevel = hlsInstance.levels.length - 1;
+                        const best = hlsInstance.levels[hlsInstance.levels.length - 1];
+                        resText.textContent = `${best.width || 'HD'} x ${best.height || '1080'} • Master HD Video`;
+                    }
+                    videoPlayer.play().catch(() => {});
+                });
+
+                hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
+                    if (hlsInstance.levels && hlsInstance.levels[data.level]) {
+                        const l = hlsInstance.levels[data.level];
+                        resText.textContent = `${l.width} x ${l.height} • HD Video`;
+                    }
+                });
+
+                hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+                    if (data.fatal) {
+                        switch (data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                hlsInstance.startLoad();
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                hlsInstance.recoverMediaError();
+                                break;
+                            default:
+                                resText.textContent = 'Unable to stream directly. Please click "Download Video" above.';
+                                resText.style.color = '#ef4444';
+                                break;
+                        }
+                    }
+                });
+            } else {
+                videoPlayer.src = cleanUrl;
+                videoPlayer.play().catch(() => {});
+
+                videoPlayer.addEventListener('loadedmetadata', () => {
+                    if (videoPlayer.videoWidth && videoPlayer.videoHeight) {
+                        resText.textContent = `${videoPlayer.videoWidth} x ${videoPlayer.videoHeight} • HD MP4`;
+                    }
+                });
+
+                videoPlayer.addEventListener('error', () => {
+                    if (window.Hls && Hls.isSupported() && !hlsInstance && (cleanUrl.includes('.m3u8') || cleanUrl.includes('manifest'))) {
+                        hlsInstance = new Hls();
+                        hlsInstance.loadSource(cleanUrl);
+                        hlsInstance.attachMedia(videoPlayer);
+                        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => videoPlayer.play().catch(() => {}));
+                    } else {
+                        console.warn("Toystaller Player: Direct preview blocked or pending:", cleanUrl);
+                        resText.textContent = 'Preview restricted by host. Click "Download Video" above to save the master MP4 directly.';
+                        resText.style.color = '#ef4444';
+                    }
+                });
+            }
         } else {
-            document.title = 'Toystaller - WhatsApp Image Viewer';
-            imageViewer.style.display = 'block';
+            // Image Mode
             videoPlayer.style.display = 'none';
+            imageViewer.style.display = 'block';
             if (shortcutsText) shortcutsText.style.display = 'none';
-            if (formatText) formatText.textContent = 'Direct High-Resolution Photo';
+            if (formatText) formatText.textContent = 'High-Resolution Image';
 
             dlBtn.innerHTML = `
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
@@ -87,176 +355,160 @@
             `;
 
             imageViewer.src = sourceUrl;
-
-            imageViewer.addEventListener('load', () => {
+            imageViewer.onload = () => {
                 if (imageViewer.naturalWidth && imageViewer.naturalHeight) {
-                    resText.textContent = `${imageViewer.naturalWidth} x ${imageViewer.naturalHeight} • Full-Res Image`;
+                    resText.textContent = `${imageViewer.naturalWidth} x ${imageViewer.naturalHeight} • Master Photo`;
                 }
-            });
-
-            imageViewer.addEventListener('error', () => {
-                resText.textContent = 'Could not display image directly.';
+            };
+            imageViewer.onerror = () => {
+                console.warn("Toystaller Player: Host blocked embedding this image:", sourceUrl);
+                resText.textContent = 'Preview restricted by host headers. Click "Download Image" to save directly.';
                 resText.style.color = '#ef4444';
-            });
+            };
         }
     }
 
-    if (videoUrl) {
-        const lower = videoUrl.toLowerCase();
-        const isVideo = lower.includes('.mp4') || lower.includes('.webm') || lower.includes('.m4v') || lower.includes('mime=video') || lower.includes('/video/');
-        setupMediaDisplay(videoUrl, isVideo);
+    // Initialize with direct URL or cached session ID
+    if (rawUrl) {
+        const isVid = detectIsVideo(rawUrl);
+        setupMediaDisplay(rawUrl, isVid, null, platformParam);
     } else if (mediaId) {
         chrome.runtime.sendMessage({ action: 'getPlayerMedia', id: mediaId }, (response) => {
-            if (chrome.runtime.lastError || !response) {
-                // Secondary fallback check
-                chrome.runtime.sendMessage({ action: 'getViewerMedia', id: mediaId }, (res2) => {
-                    if (chrome.runtime.lastError || !res2) {
-                        showError('Could not retrieve media session from WhatsApp Web. Please try again.');
-                        return;
-                    }
-                    processSessionMedia(res2);
-                });
-                return;
+            if (response && (response.url || response.dataUrl)) {
+                setupMediaDisplay(response.dataUrl || response.url, response.isVideo !== false, response.filename, response.platform || 'WhatsApp');
+            } else {
+                showError('Media session expired or not found. Please click the button on the media element again.');
             }
-            processSessionMedia(response);
         });
     }
 
-    function processSessionMedia(data) {
-        const isVideo = data.isVideo !== undefined ? data.isVideo : true;
-        const filename = data.filename || `WhatsApp_${isVideo ? 'Video' : 'Image'}_${Date.now()}.${isVideo ? 'mp4' : 'jpg'}`;
-
-        if (data.dataUrl) {
-            // High-performance Base64 Data URL to Blob ObjectURL conversion
-            fetch(data.dataUrl)
-                .then(res => res.blob())
-                .then(blob => {
-                    const objectUrl = URL.createObjectURL(blob);
-                    setupMediaDisplay(objectUrl, isVideo, filename);
-                })
-                .catch(() => {
-                    // Direct dataUrl fallback
-                    setupMediaDisplay(data.dataUrl, isVideo, filename);
-                });
-            return;
-        }
-
-        if (data.url) {
-            setupMediaDisplay(data.url, isVideo, filename);
-            return;
-        }
-
-        if (data.buffer) {
-            try {
-                const buffer = data.buffer instanceof ArrayBuffer
-                    ? data.buffer
-                    : (data.buffer.buffer || new Uint8Array(data.buffer).buffer);
-                const blob = new Blob([buffer], { type: data.mimeType || (isVideo ? 'video/mp4' : 'image/jpeg') });
-                const objectUrl = URL.createObjectURL(blob);
-                setupMediaDisplay(objectUrl, isVideo, filename);
-            } catch (err) {
-                console.error('Toystaller buffer decoding error:', err);
-                showError('Error decoding media: ' + err.message);
-            }
-            return;
-        }
-
-        showError('No playable stream or image found in this session.');
-    }
-
-    // --- Action Button Handlers ---
+    // Download Button handler
     dlBtn.addEventListener('click', () => {
         if (!activeDownloadUrl) return;
 
-        if (activeDownloadUrl.startsWith('blob:') || activeDownloadUrl.startsWith('data:')) {
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = activeDownloadUrl;
-            a.download = activeFilename;
-            document.body.appendChild(a);
-            a.click();
-            setTimeout(() => a.remove(), 2000);
-            animateDownloadBtn();
-            return;
-        }
+        if (isHls) {
+            dlBtn.disabled = true;
+            dlBtn.textContent = 'Preparing download...';
 
-        chrome.runtime.sendMessage({
-            action: 'downloadMedia',
-            url: activeDownloadUrl,
-            filename: activeFilename
-        }, (response) => {
-            if (response && response.success) {
-                animateDownloadBtn();
-            } else {
-                const a = document.createElement('a');
-                a.style.display = 'none';
-                a.href = activeDownloadUrl;
-                a.download = activeFilename;
-                document.body.appendChild(a);
-                a.click();
-                setTimeout(() => a.remove(), 2000);
-                animateDownloadBtn();
-            }
-        });
+            downloadHlsVideo(activeDownloadUrl, activeFilename, (curr, total) => {
+                const pct = Math.round((curr / total) * 100);
+                dlBtn.textContent = `Downloading ${pct}%...`;
+            }).then(() => {
+                dlBtn.textContent = 'Download Complete!';
+                setTimeout(restoreDlBtn, 2500);
+            }).catch((err) => {
+                console.warn('HLS client assembly fallback:', err);
+                chrome.runtime.sendMessage({
+                    action: 'downloadMedia',
+                    url: activeDownloadUrl,
+                    filename: activeFilename
+                }, () => {
+                    dlBtn.textContent = 'Download Started';
+                    setTimeout(restoreDlBtn, 2500);
+                });
+            });
+        } else {
+            chrome.runtime.sendMessage({
+                action: 'downloadMedia',
+                url: activeDownloadUrl,
+                filename: activeFilename
+            }, (response) => {
+                if (response && response.success) {
+                    dlBtn.innerHTML = `
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                        Download Started
+                    `;
+                    setTimeout(restoreDlBtn, 2500);
+                }
+            });
+        }
     });
 
-    function animateDownloadBtn() {
-        const originalText = dlBtn.innerHTML;
-        dlBtn.innerHTML = `
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                <polyline points="20 6 9 17 4 12"></polyline>
-            </svg>
-            Download Started
-        `;
-        dlBtn.style.background = '#128C7E';
-        setTimeout(() => {
-            dlBtn.innerHTML = originalText;
-            dlBtn.style.background = '#25D366';
-        }, 2200);
-    }
-
+    // Copy Link handler
     copyBtn.addEventListener('click', () => {
-        const textToCopy = videoUrl || (activeDownloadUrl.startsWith('blob:') ? window.location.href : activeDownloadUrl);
-        navigator.clipboard.writeText(textToCopy).then(() => {
+        if (!activeDownloadUrl) return;
+        navigator.clipboard.writeText(activeDownloadUrl).then(() => {
             copyBtn.textContent = 'Copied!';
             setTimeout(() => {
                 copyBtn.innerHTML = `
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
                     Copy Link
                 `;
             }, 1800);
-        }).catch(() => {});
+        });
     });
 
-    // --- Keyboard Shortcuts for Video Player ---
-    window.addEventListener('keydown', (e) => {
-        if (!isVideoMode || !videoPlayer) return;
-        const tag = (e.target && e.target.tagName ? e.target.tagName.toLowerCase() : '');
-        if (tag === 'input' || tag === 'textarea') return;
+    // Copy Audio handler
+    if (copyAudioBtn) {
+        copyAudioBtn.addEventListener('click', () => {
+            if (!activeAudioUrl) return;
+            navigator.clipboard.writeText(activeAudioUrl).then(() => {
+                copyAudioBtn.textContent = 'Audio Copied!';
+                setTimeout(() => {
+                    copyAudioBtn.innerHTML = `
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                        Copy Audio
+                    `;
+                }, 1800);
+            });
+        });
+    }
 
-        if (e.code === 'Space') {
+    // Download Audio handler
+    if (dlAudioBtn) {
+        dlAudioBtn.addEventListener('click', () => {
+            if (!activeAudioUrl) return;
+            chrome.runtime.sendMessage({
+                action: 'downloadMedia',
+                url: activeAudioUrl,
+                filename: activeAudioFilename || `Toystaller_Audio_${Date.now()}.mp3`
+            }, (response) => {
+                if (response && response.success) {
+                    dlAudioBtn.innerHTML = `
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                        Audio Downloading
+                    `;
+                    setTimeout(() => {
+                        dlAudioBtn.innerHTML = `
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                            Download Audio
+                        `;
+                    }, 2500);
+                }
+            });
+        });
+    }
+
+    // Keyboard Shortcuts
+    window.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+        if (e.code === 'Space' && isVideoMode) {
             e.preventDefault();
             if (videoPlayer.paused) {
                 videoPlayer.play();
             } else {
                 videoPlayer.pause();
             }
-        } else if (e.code === 'KeyM') {
-            e.preventDefault();
-            videoPlayer.muted = !videoPlayer.muted;
-        } else if (e.code === 'KeyF') {
-            e.preventDefault();
-            if (!document.fullscreenElement) {
-                videoPlayer.requestFullscreen().catch(() => {});
-            } else {
-                document.exitFullscreen().catch(() => {});
+        } else if (e.key === 'm' || e.key === 'M') {
+            if (isVideoMode) {
+                videoPlayer.muted = !videoPlayer.muted;
             }
-        } else if (e.code === 'ArrowRight') {
-            e.preventDefault();
-            videoPlayer.currentTime = Math.min(videoPlayer.duration || 0, videoPlayer.currentTime + 5);
-        } else if (e.code === 'ArrowLeft') {
-            e.preventDefault();
-            videoPlayer.currentTime = Math.max(0, videoPlayer.currentTime - 5);
+        } else if (e.key === 'f' || e.key === 'F') {
+            const targetEl = isVideoMode ? videoPlayer : imageViewer;
+            if (!document.fullscreenElement) {
+                if (targetEl.requestFullscreen) targetEl.requestFullscreen().catch(() => {});
+            } else {
+                if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+            }
         }
     });
 })();
+

@@ -24,14 +24,21 @@ chrome.webRequest.onResponseStarted.addListener(
 
         if (!isKnownCdn && type !== 'media' && type !== 'image') return;
 
-        const isVideo = (type === 'media') ||
+        const isAudio = lowerUrl.includes('/v/t42.') ||
+                        lowerUrl.includes('mime=audio') ||
+                        lowerUrl.includes('mime%3daudio') ||
+                        lowerUrl.includes('stream_type=audio') ||
+                        lowerUrl.includes('/audio/') ||
+                        lowerUrl.includes('audio_');
+
+        const isVideo = !isAudio && (
+                        (type === 'media') ||
                         (mediaExtensions.some(ext => lowerUrl.includes(ext))) ||
                         lowerUrl.includes('mime=video') ||
                         lowerUrl.includes('/video/') ||
                         lowerUrl.includes('playback') ||
                         lowerUrl.includes('videoplayback') ||
-                        lowerUrl.includes('/v/t42.') ||
-                        lowerUrl.includes('/v/t64.');
+                        lowerUrl.includes('/v/t64.'));
 
         const isImage = (type === 'image') ||
                         (imageExtensions.some(ext => lowerUrl.includes(ext))) ||
@@ -39,12 +46,21 @@ chrome.webRequest.onResponseStarted.addListener(
                         lowerUrl.includes('/t39.30808-6/') ||
                         lowerUrl.includes('/p50x50/');
 
-        if (isVideo || isImage) {
+        if (isVideo || isAudio || isImage) {
             if (!interceptedMedia[tabId]) {
-                interceptedMedia[tabId] = { video: new Set(), img: new Set() };
+                interceptedMedia[tabId] = { video: new Set(), audio: new Set(), img: new Set() };
             }
 
-            if (isVideo && !lowerUrl.includes('/audio') && !lowerUrl.includes('.mpd') && !lowerUrl.includes('manifest')) {
+            if (isAudio && !lowerUrl.includes('.mpd') && !lowerUrl.includes('manifest')) {
+                let clean = url.replace(/\\\//g, '/')
+                               .replace(/&amp;/g, '&')
+                               .replace(/\\u0026/g, '&')
+                               .replace(/([?&])bytestart=\d+&?/g, '$1')
+                               .replace(/([?&])byteend=\d+&?/g, '$1')
+                               .replace(/[?&]$/, '')
+                               .trim();
+                interceptedMedia[tabId].audio.add(clean);
+            } else if (isVideo && !lowerUrl.includes('/audio') && !lowerUrl.includes('.mpd') && !lowerUrl.includes('manifest')) {
                 let clean = url.replace(/\\\//g, '/')
                                .replace(/&amp;/g, '&')
                                .replace(/\\u0026/g, '&')
@@ -67,7 +83,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const mediaType = request.mediaType;
         const tabMedia = interceptedMedia[tabId];
         const urls = tabMedia && tabMedia[mediaType] ? Array.from(tabMedia[mediaType]) : [];
-        sendResponse({ urls: urls });
+        const audioUrls = tabMedia && tabMedia.audio ? Array.from(tabMedia.audio) : [];
+        sendResponse({ urls: urls, audioUrls: audioUrls });
     } else if (request.action === 'downloadMedia') {
         const downloadOptions = {
             url: request.url,
@@ -157,13 +174,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         );
 
         const platform = request.platform || '';
+        const platformLower = platform.toLowerCase();
         
         // Check if this media specifically requires the Toystaller anti-hotlink player wrapper
         const isSpecialVideoPlatform = (
-            platform === 'Facebook' || 
-            platform === 'LinkedIn' || 
-            platform === 'Instagram' || 
-            platform === 'WhatsApp' ||
+            platformLower === 'facebook' || 
+            platformLower === 'linkedin' || 
+            platformLower === 'instagram' || 
+            platformLower === 'whatsapp' ||
             lowerUrl.includes('fbcdn.net') ||
             lowerUrl.includes('fbsbx.com') ||
             lowerUrl.includes('licdn.com') ||
@@ -178,9 +196,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // directly pop out the raw URL in the new tab. This avoids cross-origin embedding blocks (CORS/CORP) and guarantees 100% display!
         const shouldUsePlayer = isVideo && (isSpecialVideoPlatform || isHlsStream || request.forcePlayer);
 
-        const playerUrl = chrome.runtime.getURL('player.html') + 
+        let playerUrl = chrome.runtime.getURL('player.html') + 
             '?url=' + encodeURIComponent(url) + 
             (platform ? '&platform=' + encodeURIComponent(platform) : '');
+        if (request.audioUrl) {
+            playerUrl += '&audioUrl=' + encodeURIComponent(request.audioUrl);
+        }
         
         const targetUrl = shouldUsePlayer ? playerUrl : url;
 
