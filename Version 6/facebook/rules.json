@@ -19,6 +19,7 @@
     },
     "condition": {
       "urlFilter": "||fbcdn.net",
+      "excludedInitiatorDomains": ["facebook.com", "messenger.com"],
       "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
     }
   },
@@ -42,6 +43,7 @@
     },
     "condition": {
       "urlFilter": "||fbsbx.com",
+      "excludedInitiatorDomains": ["facebook.com", "messenger.com"],
       "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
     }
   }

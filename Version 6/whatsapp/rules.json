@@ -19,6 +19,7 @@
     },
     "condition": {
       "urlFilter": "||whatsapp.net",
+      "excludedInitiatorDomains": ["whatsapp.com", "web.whatsapp.com"],
       "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
     }
   },
@@ -42,6 +43,7 @@
     },
     "condition": {
       "urlFilter": "||whatsapp.com",
+      "excludedInitiatorDomains": ["whatsapp.com", "web.whatsapp.com"],
       "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
     }
   }

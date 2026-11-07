@@ -76,46 +76,77 @@
         return patterns.some(pattern => url.includes(pattern));
     };
 
-    // Patch fetch()
+    // Safe fetch() wrapper:
+    // Always invokes with window context to prevent "Illegal invocation" in strict mode.
+    // Strictly targets JSON API / GraphQL responses and never clones or locks media/binary streams.
     const originalFetch = window.fetch;
-    window.fetch = async function (...args) {
-        const response = await originalFetch.apply(this, args);
+    window.fetch = function (...args) {
+        const promise = originalFetch.apply(window, args);
         try {
-            const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
-            if (shouldIntercept(url)) {
-                const clone = response.clone();
-                clone.json().then(data => {
-                    const foundVideos = findVideoUrls(data);
-                    dispatchVideoUrls(foundVideos);
+            const rawUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
+            const lowerUrl = rawUrl.toLowerCase();
+            // Strictly exclude video streams, byte ranges, manifests, and CDNs
+            if (
+                !lowerUrl.includes('.mp4') &&
+                !lowerUrl.includes('.m4v') &&
+                !lowerUrl.includes('.webm') &&
+                !lowerUrl.includes('bytestart') &&
+                !lowerUrl.includes('cdninstagram.com') &&
+                !lowerUrl.includes('fbcdn.net') &&
+                shouldIntercept(lowerUrl)
+            ) {
+                promise.then(response => {
+                    try {
+                        const contentType = response.headers ? response.headers.get('content-type') : '';
+                        if (contentType && contentType.includes('application/json')) {
+                            response.clone().json().then(data => {
+                                const foundVideos = findVideoUrls(data);
+                                dispatchVideoUrls(foundVideos);
+                            }).catch(() => {});
+                        }
+                    } catch (e) {}
                 }).catch(() => {});
             }
         } catch (e) {}
-        return response;
+        return promise;
     };
 
-    // Patch XMLHttpRequest
-    const OriginalXHR = window.XMLHttpRequest;
-    function PatchedXHR() {
-        const xhr = new OriginalXHR();
-        const originalOpen = xhr.open.bind(xhr);
-        let reqUrl = '';
-        xhr.open = function (method, url, ...rest) {
-            reqUrl = url || '';
-            return originalOpen(method, url, ...rest);
-        };
-        xhr.addEventListener('load', function () {
+    // Safe prototype hooking for XMLHttpRequest:
+    // Retains native window.XMLHttpRequest constructor, preserves XMLHttpRequest.DONE and readyState constants,
+    // and never accesses responseText on arraybuffer/blob media streams (preventing InvalidStateError).
+    const originalXHROpen = XMLHttpRequest.prototype.open;
+    const originalXHRSend = XMLHttpRequest.prototype.send;
+
+    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+        this._toystaller_url = (typeof url === 'string') ? url : '';
+        return originalXHROpen.apply(this, [method, url, ...rest]);
+    };
+
+    XMLHttpRequest.prototype.send = function (...args) {
+        this.addEventListener('load', function () {
             try {
+                // Strict guard: only inspect if response is text/json.
+                // Modern video loaders use arraybuffer/blob — accessing responseText on those throws InvalidStateError!
+                if (this.responseType !== '' && this.responseType !== 'text') {
+                    return;
+                }
+                const reqUrl = (this._toystaller_url || '').toLowerCase();
+                // Never intercept binary media, dash manifests, or CDN video chunks
+                if (reqUrl.includes('.mp4') || reqUrl.includes('.m4v') || reqUrl.includes('bytestart') || reqUrl.includes('cdninstagram.com')) {
+                    return;
+                }
                 if (shouldIntercept(reqUrl)) {
-                    const data = JSON.parse(this.responseText);
-                    const foundVideos = findVideoUrls(data);
-                    dispatchVideoUrls(foundVideos);
+                    const text = this.responseText;
+                    if (text && (text.startsWith('{') || text.startsWith('['))) {
+                        const data = JSON.parse(text);
+                        const foundVideos = findVideoUrls(data);
+                        dispatchVideoUrls(foundVideos);
+                    }
                 }
             } catch (e) {}
         });
-        return xhr;
-    }
-    PatchedXHR.prototype = OriginalXHR.prototype;
-    window.XMLHttpRequest = PatchedXHR;
+        return originalXHRSend.apply(this, args);
+    };
 
     // --- React Fiber Extraction ---
 

@@ -162,52 +162,68 @@
 
     // --- Network Interception: Fetch ---
     const originalFetch = window.fetch;
-    window.fetch = async function (...args) {
-        const response = await originalFetch.apply(this, args);
+    window.fetch = function (...args) {
+        const promise = originalFetch.apply(window, args);
         try {
-            const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
+            const rawUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
+            const lowerUrl = rawUrl.toLowerCase();
             if (
-                url.includes('facebook.com') ||
-                url.includes('fbcdn.net') ||
-                url.includes('graph.') ||
-                url.includes('/api/graphql') ||
-                url.includes('/ajax/') ||
-                url.includes('graphql')
+                !lowerUrl.includes('.mp4') &&
+                !lowerUrl.includes('.m4v') &&
+                !lowerUrl.includes('.webm') &&
+                !lowerUrl.includes('bytestart') &&
+                (
+                    lowerUrl.includes('/api/graphql') ||
+                    lowerUrl.includes('/ajax/') ||
+                    lowerUrl.includes('graphql')
+                )
             ) {
-                const clone = response.clone();
-                clone.text().then(extractUrlsFromText).catch(() => {});
+                promise.then(response => {
+                    try {
+                        const contentType = response.headers ? response.headers.get('content-type') : '';
+                        if (contentType && (contentType.includes('json') || contentType.includes('text'))) {
+                            response.clone().text().then(extractUrlsFromText).catch(() => {});
+                        }
+                    } catch (e) {}
+                }).catch(() => {});
             }
         } catch (e) {}
-        return response;
+        return promise;
     };
 
     // --- Network Interception: XMLHttpRequest ---
-    const OriginalXHR = window.XMLHttpRequest;
-    function PatchedXHR() {
-        const xhr = new OriginalXHR();
-        const originalOpen = xhr.open.bind(xhr);
-        let reqUrl = '';
-        xhr.open = function (method, url, ...rest) {
-            reqUrl = url || '';
-            return originalOpen(method, url, ...rest);
-        };
-        xhr.addEventListener('load', function () {
+    const originalXHROpen = XMLHttpRequest.prototype.open;
+    const originalXHRSend = XMLHttpRequest.prototype.send;
+
+    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+        this._toystaller_url = (typeof url === 'string') ? url : '';
+        return originalXHROpen.apply(this, [method, url, ...rest]);
+    };
+
+    XMLHttpRequest.prototype.send = function (...args) {
+        this.addEventListener('load', function () {
             try {
+                if (this.responseType !== '' && this.responseType !== 'text') {
+                    return;
+                }
+                const reqUrl = (this._toystaller_url || '').toLowerCase();
+                if (reqUrl.includes('.mp4') || reqUrl.includes('.m4v') || reqUrl.includes('bytestart') || reqUrl.includes('fbcdn.net')) {
+                    return;
+                }
                 if (
-                    reqUrl.includes('facebook.com') ||
-                    reqUrl.includes('fbcdn.net') ||
                     reqUrl.includes('/api/graphql') ||
                     reqUrl.includes('/ajax/') ||
                     reqUrl.includes('graphql')
                 ) {
-                    extractUrlsFromText(this.responseText);
+                    const text = this.responseText;
+                    if (text) {
+                        extractUrlsFromText(text);
+                    }
                 }
             } catch (e) {}
         });
-        return xhr;
-    }
-    PatchedXHR.prototype = OriginalXHR.prototype;
-    window.XMLHttpRequest = PatchedXHR;
+        return originalXHRSend.apply(this, args);
+    };
 
     // --- Scan Pre-loaded HTML Scripts on Startup & Dynamic Injections ---
     function scanAllScripts() {

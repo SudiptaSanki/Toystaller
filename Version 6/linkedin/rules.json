@@ -19,6 +19,7 @@
     },
     "condition": {
       "urlFilter": "||licdn.com",
+      "excludedInitiatorDomains": ["linkedin.com"],
       "resourceTypes": [
         "main_frame",
         "sub_frame",
