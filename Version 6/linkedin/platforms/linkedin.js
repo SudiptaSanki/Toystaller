@@ -295,8 +295,6 @@
     };
 
     if (typeof window !== 'undefined') {
-        window.ToystallerPlatforms = window.ToystallerPlatforms || {};
-        window.ToystallerPlatforms['linkedin'] = linkedinPlatform;
         window.ToystallerPlatform = linkedinPlatform;
         window.ToystallerActivePlatform = linkedinPlatform;
     }

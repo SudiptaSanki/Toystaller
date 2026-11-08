@@ -140,6 +140,10 @@ function scoreVideoUrl(url) {
 
 function pickBestVideoUrl(urls) {
     if (!urls || urls.length === 0) return null;
+    const platform = PlatformManager.getPlatform();
+    if (platform && platform.pickBestVideoUrl) {
+        return platform.pickBestVideoUrl(urls);
+    }
     // Strictly filter out DASH fragments, audio-only streams, and unplayable manifests
     let playable = urls.filter(u => {
         const lower = u.toLowerCase();
@@ -592,8 +596,24 @@ function injectDownloadButtons() {
             };
 
             const getMediaUrl = (callback, silent = false) => {
-                // Step 1: Try React Fiber extraction (works on Instagram & Facebook)
+                const platform = PlatformManager.getPlatform();
+
                 if (isVideo) {
+                    // Step 1: Check platform DOM extraction first (e.g. LinkedIn data-sources)
+                    if (platform.extractVideoUrlFromDOM) {
+                        const domUrl = platform.extractVideoUrlFromDOM(media);
+                        if (domUrl && (platform.isValidVideo ? platform.isValidVideo(domUrl) : true)) {
+                            const cleanDom = domUrl.split('#')[0];
+                            let domAudio = null;
+                            let domMuted = null;
+                            if (platform.extractAudioUrlFromDOM) domAudio = platform.extractAudioUrlFromDOM(media);
+                            if (platform.extractDashVideoFromDOM) domMuted = platform.extractDashVideoFromDOM(media);
+                            callback(cleanDom, domAudio, domMuted);
+                            return;
+                        }
+                    }
+
+                    // Step 2: Try React Fiber extraction via page_interceptor (for Facebook, Instagram)
                     let resolved = false;
                     const handler = (e) => {
                         if (!e.data || e.data.type !== 'magic_response_react_url_' + magicId) return;
@@ -603,18 +623,6 @@ function injectDownloadButtons() {
                         if (e.data.url) {
                             let resolvedAudio = e.data.audioUrl || null;
                             const mutedUrl = e.data.mutedUrl || null;
-                            if (!resolvedAudio && pageInterceptedVideoUrls.size > 0) {
-                                resolvedAudio = pickBestAudioUrl(Array.from(pageInterceptedVideoUrls).slice(-5)) || pickBestAudioUrl(Array.from(pageInterceptedVideoUrls));
-                            }
-                            if (!resolvedAudio) {
-                                safeSendMessage({ action: 'getMediaUrls', mediaType: 'audio' }, (response) => {
-                                    if (response && response.audioUrls && response.audioUrls.length > 0) {
-                                        resolvedAudio = pickBestAudioUrl(response.audioUrls.slice(-5)) || pickBestAudioUrl(response.audioUrls);
-                                    }
-                                    callback(e.data.url, resolvedAudio, mutedUrl);
-                                });
-                                return;
-                            }
                             callback(e.data.url, resolvedAudio, mutedUrl);
                         } else {
                             getMediaUrlFallback(callback, silent);
@@ -637,14 +645,45 @@ function injectDownloadButtons() {
             };
 
             const getMediaUrlFallback = (callback, silent = false) => {
+                const platform = PlatformManager.getPlatform();
                 const currentSrc = media.currentSrc || media.src || '';
                 const isBlobSource = currentSrc.startsWith('blob:') || currentSrc.startsWith('data:');
-                const host = window.location.hostname.toLowerCase();
 
-                // 1. Social platform blob: fallback since they use blob: URLs and filename matching is impossible.
-                // Grab the best platform-specific CDN video URL from intercepted page URLs (GraphQL/API).
+                // 1. Direct DOM check again
+                if (isVideo && platform.extractVideoUrlFromDOM) {
+                    const domUrl = platform.extractVideoUrlFromDOM(media);
+                    if (domUrl && (platform.isValidVideo ? platform.isValidVideo(domUrl) : true)) {
+                        callback(domUrl.split('#')[0], null, null);
+                        return;
+                    }
+                }
+
+                // 2. Direct non-blob source check
+                const isInternalPage = (urlStr) => {
+                    const lower = (urlStr || '').toLowerCase();
+                    return lower.includes('//www.facebook.com') ||
+                           lower.includes('//facebook.com') ||
+                           lower.includes('//www.instagram.com') ||
+                           lower.includes('//instagram.com') ||
+                           lower.includes('//www.linkedin.com') ||
+                           lower.includes('//linkedin.com');
+                };
+
+                if (isVideo && !isBlobSource && currentSrc && !isInternalPage(currentSrc) && (platform.isValidVideo ? platform.isValidVideo(currentSrc) : true)) {
+                    callback(currentSrc.split('#')[0], null, null);
+                    return;
+                }
+
+                if (isVideo) {
+                    const sourceTag = media.querySelector('source');
+                    if (sourceTag && sourceTag.src && !sourceTag.src.startsWith('blob:') && !sourceTag.src.startsWith('data:') && !isInternalPage(sourceTag.src) && (platform.isValidVideo ? platform.isValidVideo(sourceTag.src) : true)) {
+                        callback(sourceTag.src.split('#')[0], null, null);
+                        return;
+                    }
+                }
+
+                // 3. Match from in-memory intercepted video URLs (fetch/XHR)
                 if (isVideo && isBlobSource && pageInterceptedVideoUrls.size > 0) {
-                    const platform = PlatformManager.getPlatform();
                     const platformVideos = platform.filterBackgroundUrls ? platform.filterBackgroundUrls(Array.from(pageInterceptedVideoUrls), true) : Array.from(pageInterceptedVideoUrls);
 
                     if (platformVideos.length > 0) {
@@ -655,85 +694,28 @@ function injectDownloadButtons() {
                             matchedVideos = platformVideos.filter(u => u.includes(idMatch[1]));
                         }
 
-                        // If matched with ID in URL use that; otherwise take recent candidates from currently playing video!
-                        const candidateVideos = matchedVideos.length > 0 ? matchedVideos : platformVideos.slice(-5);
-                        const best = pickBestVideoUrl(candidateVideos);
-                        if (best) {
-                            let candidateAudios = Array.from(pageInterceptedVideoUrls);
-                            if (idMatch && idMatch[1]) {
-                                const idAudios = candidateAudios.filter(u => u.includes(idMatch[1]));
-                                if (idAudios.length > 0) candidateAudios = idAudios;
+                        // ONLY use candidates matched by post/video ID for social platforms
+                        const candidateVideos = matchedVideos.length > 0 ? matchedVideos : (platform.name === 'generic' ? platformVideos.slice(-5) : []);
+                        if (candidateVideos.length > 0) {
+                            const best = pickBestVideoUrl(candidateVideos);
+                            if (best) {
+                                let candidateAudios = Array.from(pageInterceptedVideoUrls);
+                                if (idMatch && idMatch[1]) {
+                                    const idAudios = candidateAudios.filter(u => u.includes(idMatch[1]));
+                                    if (idAudios.length > 0) candidateAudios = idAudios;
+                                }
+                                const bestAudio = pickBestAudioUrl(candidateAudios) || null;
+                                callback(best, bestAudio, null);
+                                return;
                             }
-                            const bestAudio = pickBestAudioUrl(candidateAudios.slice(-5)) || pickBestAudioUrl(candidateAudios) || null;
-                            callback(best, bestAudio, null);
-                            return;
                         }
                     }
                 }
 
-                const getFilename = (urlStr) => {
-                    try {
-                        const parts = new URL(urlStr).pathname.split('/');
-                        const name = parts.pop();
-                        return (name && name.length > 5) ? name : null;
-                    } catch (e) { return null; }
-                };
-
-                const currentFilename = getFilename(currentSrc);
-
-                if (isVideo && pageInterceptedVideoUrls.size > 0 && currentFilename) {
-                    const matches = Array.from(pageInterceptedVideoUrls).filter(u => {
-                        const interceptedName = getFilename(u);
-                        return interceptedName && interceptedName === currentFilename && !u.includes('bytestart');
-                    });
-
-                    if (matches.length > 0) {
-                        const best = pickBestVideoUrl(matches);
-                        const bestAudio = pickBestAudioUrl(Array.from(pageInterceptedVideoUrls).slice(-5)) || pickBestAudioUrl(Array.from(pageInterceptedVideoUrls));
-                        if (best) {
-                            callback(best, bestAudio, null);
-                            return;
-                        }
-                    }
-                }
-
-                const isInternalPage = (urlStr) => {
-                    const lower = (urlStr || '').toLowerCase();
-                    return lower.includes('//www.facebook.com') ||
-                           lower.includes('//facebook.com') ||
-                           lower.includes('//www.instagram.com') ||
-                           lower.includes('//instagram.com');
-                };
-
-                if (isVideo && media.currentSrc &&
-                    !media.currentSrc.startsWith('blob:') &&
-                    !media.currentSrc.startsWith('data:') &&
-                    !isInternalPage(media.currentSrc)) {
-                    callback(media.currentSrc, null, null);
-                    return;
-                }
-
-                if (media.src && !media.src.startsWith('blob:') && !media.src.startsWith('data:') && !isInternalPage(media.src)) {
-                    callback(media.src, null, null);
-                    return;
-                }
-
-                if (isVideo) {
-                    const sourceTag = media.querySelector('source');
-                    if (sourceTag && sourceTag.src &&
-                        !sourceTag.src.startsWith('blob:') &&
-                        !sourceTag.src.startsWith('data:') &&
-                        !isInternalPage(sourceTag.src)) {
-                        callback(sourceTag.src, null, null);
-                        return;
-                    }
-                }
-
-                // 2. Last resort: ask background script for network-intercepted URLs (webRequest)
+                // 4. Fallback to background script webRequest (strictly ID-scoped on social platforms)
                 const mediaType = isVideo ? 'video' : 'img';
                 safeSendMessage({ action: 'getMediaUrls', mediaType: mediaType }, (response) => {
                     if (response && response.urls && response.urls.length > 0) {
-                        const platform = PlatformManager.getPlatform();
                         let candidates = response.urls;
                         const filtered = platform.filterBackgroundUrls ? platform.filterBackgroundUrls(candidates, isVideo) : candidates;
                         if (filtered && filtered.length > 0) candidates = filtered;
@@ -745,18 +727,20 @@ function injectDownloadButtons() {
                             matched = candidates.filter(u => u.includes(idMatch[1]));
                         }
 
-                        // If matched with ID in URL use that; otherwise take recent candidates from currently playing video!
-                        const finalCandidates = matched.length > 0 ? matched : candidates.slice(-5);
-                        const best = pickBestVideoUrl(finalCandidates);
-                        if (best) {
-                            let audioCandidates = response.audioUrls || [];
-                            if (idMatch && idMatch[1]) {
-                                const idAudios = audioCandidates.filter(u => u.includes(idMatch[1]));
-                                if (idAudios.length > 0) audioCandidates = idAudios;
+                        // Use matched candidate if found; NEVER pick a random candidate on social platforms
+                        const finalCandidates = matched.length > 0 ? matched : (platform.name === 'generic' ? candidates.slice(-5) : []);
+                        if (finalCandidates.length > 0) {
+                            const best = pickBestVideoUrl(finalCandidates);
+                            if (best) {
+                                let audioCandidates = response.audioUrls || [];
+                                if (idMatch && idMatch[1]) {
+                                    const idAudios = audioCandidates.filter(u => u.includes(idMatch[1]));
+                                    if (idAudios.length > 0) audioCandidates = idAudios;
+                                }
+                                const bestAudio = pickBestAudioUrl(audioCandidates) || null;
+                                callback(best, bestAudio, null);
+                                return;
                             }
-                            const bestAudio = pickBestAudioUrl(audioCandidates.slice(-5)) || pickBestAudioUrl(audioCandidates) || null;
-                            callback(best, bestAudio, null);
-                            return;
                         }
                     }
                     if (!silent) {

@@ -1,189 +1,209 @@
 // page_interceptor.js
-// Runs in the page context. Intercepts fetch/XHR for CDN video URLs
-// and exposes a React Fiber extractor for accurate per-video URL lookup.
+// Runs in the MAIN page world (web.whatsapp.com).
+// Features:
+// 1. Intercepts window.URL.createObjectURL to register all decrypted WhatsApp media blobs.
+// 2. Direct browser downloader: triggers anchor-click downloads from the main page context.
+// 3. Media reader: converts decrypted blobs to Base64 Data URLs for dedicated viewer tabs.
+// 4. Intercepts fetch/XHR and React Fiber for media resolution.
 
 (function () {
     'use strict';
-    // Guard: prevent double-execution if loaded via both manifest and dynamic injection
     if (window.__toystallerInterceptorLoaded) return;
     window.__toystallerInterceptorLoaded = true;
 
-    const VIDEO_KEYS = new Set([
-        'video_url', 'playback_url', 'src', 'url', 'dash_manifest',
-        'progressiveUrl', 'downloadUrl', 'streamingUrl', 'videoUrl',
-        'progressiveStreams', 'transcodedVideoUrl',
-        'playable_url', 'playable_url_quality_hd',
-        'adaptiveStreams', 'mediaUrl',
-        'media', 'rootUrl', 'liveVideoUrl', 'thumbnail'
-    ]);
+    // --- 1. Blob Interception Registry ---
+    const blobCache = new Map(); // url -> { blob, mimeType, timestamp }
+    const originalCreateObjectURL = window.URL.createObjectURL;
 
-    const getPlatform = () => {
-        if (window.ToystallerPlatform) return window.ToystallerPlatform;
-        if (window.ToystallerActivePlatform) return window.ToystallerActivePlatform;
-        const host = window.location.hostname.toLowerCase();
-        const platforms = window.ToystallerPlatforms || {};
-        if (host.includes('facebook.com') && platforms['facebook']) return platforms['facebook'];
-        if (host.includes('instagram.com') && platforms['instagram']) return platforms['instagram'];
-        if (host.includes('linkedin.com') && platforms['linkedin']) return platforms['linkedin'];
-        if (host.includes('whatsapp.com') && platforms['whatsapp']) return platforms['whatsapp'];
-        return platforms['generic'] || {};
-    };
-
-    function isValidVideo(url) {
-        return getPlatform().isValidVideo ? getPlatform().isValidVideo(url) : true;
-    }
-
-    function findVideoUrls(obj, found = new Set(), depth = 0) {
-        if (depth > 12 || !obj || typeof obj !== 'object') return found;
-        const platform = getPlatform();
-
-        for (const key of Object.keys(obj)) {
-            const val = obj[key];
-            if (typeof val === 'string') {
-                const isHttp = val.startsWith('https://') || val.startsWith('http://');
-                if (!isHttp || val.includes('blob:')) continue;
-
-                if (platform.shouldSkipReactValue && platform.shouldSkipReactValue(val, key, true)) {
-                    continue;
-                }
-
-                const looksLikeVideo = platform.looksLikeReactVideo && platform.looksLikeReactVideo(val, key);
-                const looksLikeImage = platform.looksLikeReactImage && platform.looksLikeReactImage(val, key);
-
-                if (looksLikeVideo && !looksLikeImage && !val.toLowerCase().includes('bytestart')) {
-                    found.add(val);
-                }
-            } else if (typeof val === 'object') {
-                const platformFound = platform.extractPriorityReactUrl && platform.extractPriorityReactUrl(val, true);
-                if (platformFound) {
-                    found.add(platformFound);
-                }
-                const audioFound = platform.extractPriorityAudioUrl && platform.extractPriorityAudioUrl(val);
-                if (audioFound) {
-                    found.add(audioFound);
-                }
-                const dashFound = platform.extractDashVideoFromReact && platform.extractDashVideoFromReact(val);
-                if (dashFound) {
-                    found.add(dashFound);
-                }
-                findVideoUrls(val, found, depth + 1);
-            }
-        }
-        return found;
-    }
-
-    function dispatchVideoUrls(urls) {
-        if (!urls || urls.size === 0) return;
-        window.postMessage({ 
-            type: 'toystaller_video_urls', 
-            urls: Array.from(urls) 
-        }, '*');
-    }
-
-    // Safe fetch() wrapper:
-    // Always invokes with window context to prevent "Illegal invocation" in strict mode.
-    // Strictly targets JSON API / GraphQL responses and never clones or locks media/binary streams.
-    const originalFetch = window.fetch;
-    window.fetch = function (...args) {
-        const promise = originalFetch.apply(window, args);
+    window.URL.createObjectURL = function (obj) {
+        const url = originalCreateObjectURL.call(this, obj);
         try {
-            const rawUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
-            const lowerUrl = rawUrl.toLowerCase();
-            // Strictly exclude video streams, byte ranges, manifests, and CDNs
-            if (
-                !lowerUrl.includes('.mp4') &&
-                !lowerUrl.includes('.m4v') &&
-                !lowerUrl.includes('.webm') &&
-                !lowerUrl.includes('bytestart') &&
-                !lowerUrl.includes('cdninstagram.com') &&
-                !lowerUrl.includes('fbcdn.net') &&
-                (
-                    lowerUrl.includes('/api/v') ||
-                    lowerUrl.includes('graphql') ||
-                    lowerUrl.includes('voyager/api')
-                )
-            ) {
-                promise.then(response => {
-                    try {
-                        const contentType = response.headers ? response.headers.get('content-type') : '';
-                        if (contentType && contentType.includes('application/json')) {
-                            response.clone().json().then(data => {
-                                const foundVideos = findVideoUrls(data);
-                                dispatchVideoUrls(foundVideos);
-                            }).catch(() => {});
-                        }
-                    } catch (e) {}
-                }).catch(() => {});
+            if (obj instanceof Blob) {
+                blobCache.set(url, { blob: obj, mimeType: obj.type, timestamp: Date.now() });
+                // Keep cache bounded to last 60 media items
+                if (blobCache.size > 60) {
+                    const oldestKey = blobCache.keys().next().value;
+                    blobCache.delete(oldestKey);
+                }
             }
         } catch (e) {}
-        return promise;
+        return url;
     };
 
-    // Safe prototype hooking for XMLHttpRequest:
-    // Retains native window.XMLHttpRequest constructor, preserves XMLHttpRequest.DONE and readyState constants,
-    // and never accesses responseText on arraybuffer/blob media streams (preventing InvalidStateError).
-    const originalXHROpen = XMLHttpRequest.prototype.open;
-    const originalXHRSend = XMLHttpRequest.prototype.send;
+    // Helper: locate active status media directly in the DOM
+    function findActiveStatusMediaDOM() {
+        const statusContainer = document.querySelector(`
+            [data-animate-status-v3="true"],
+            div[data-testid="status-v3-main"],
+            div[data-testid="status-viewer"],
+            div[data-testid="media-viewer"],
+            div[aria-label*="Status" i],
+            div[aria-label*="Story" i],
+            div[role="dialog"]
+        `);
 
-    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-        this._toystaller_url = (typeof url === 'string') ? url : '';
-        return originalXHROpen.apply(this, [method, url, ...rest]);
-    };
+        if (statusContainer) {
+            const video = statusContainer.querySelector('video');
+            if (video && (video.currentSrc || video.src)) return video;
 
-    XMLHttpRequest.prototype.send = function (...args) {
-        this.addEventListener('load', function () {
-            try {
-                // Strict guard: only inspect if response is text/json.
-                // Modern video loaders use arraybuffer/blob — accessing responseText on those throws InvalidStateError!
-                if (this.responseType !== '' && this.responseType !== 'text') {
-                    return;
-                }
-                const reqUrl = (this._toystaller_url || '').toLowerCase();
-                // Never intercept binary media, dash manifests, or CDN video chunks
-                if (reqUrl.includes('.mp4') || reqUrl.includes('.m4v') || reqUrl.includes('bytestart') || reqUrl.includes('cdninstagram.com')) {
-                    return;
-                }
-                if (
-                    reqUrl.includes('/api/v') ||
-                    reqUrl.includes('graphql') ||
-                    reqUrl.includes('voyager/api')
-                ) {
-                    const text = this.responseText;
-                    if (text && (text.startsWith('{') || text.startsWith('['))) {
-                        const data = JSON.parse(text);
-                        const foundVideos = findVideoUrls(data);
-                        dispatchVideoUrls(foundVideos);
-                    }
-                }
-            } catch (e) {}
+            const imgs = Array.from(statusContainer.querySelectorAll('img'));
+            const validImgs = imgs.filter(img => {
+                const r = img.getBoundingClientRect();
+                return r.width >= 100 && r.height >= 100 && !img.src.includes('avatar') && !img.src.includes('profile');
+            });
+            if (validImgs.length > 0) {
+                return validImgs.sort((a, b) => (b.width * b.height) - (a.width * a.height))[0];
+            }
+        }
+
+        // Global fallback: any visible video
+        const videos = Array.from(document.querySelectorAll('video'));
+        const activeVideo = videos.find(v => {
+            const r = v.getBoundingClientRect();
+            return r.width > 150 && r.height > 150 && (v.currentSrc || v.src);
         });
-        return originalXHRSend.apply(this, args);
-    };
+        if (activeVideo) return activeVideo;
 
-    const SKIP_KEYS = new Set([
-        'return', 'sibling', 'child', 'alternate', 'stateNode',
-        '_owner', 'parent', 'parentElement', 'document', 'window'
-    ]);
-
-    function isSafeObject(obj) {
-        if (!obj || typeof obj !== 'object') return false;
-        if (typeof Node !== 'undefined' && obj instanceof Node) return false;
-        if (obj.nodeType || obj === window || obj === document) return false;
-        return true;
+        return null;
     }
 
+    // --- 2. Main-World Media Downloader & Reader ---
+    window.addEventListener('message', async (e) => {
+        if (!e.data || e.data.type !== 'toystaller_main_media_request') return;
+
+        let { action, url, isVideo, filename, requestId } = e.data;
+
+        // If URL wasn't found or is empty, try detecting from active status DOM
+        if (!url) {
+            const activeEl = findActiveStatusMediaDOM();
+            if (activeEl) {
+                url = activeEl.currentSrc || activeEl.src || '';
+                if (activeEl.tagName.toLowerCase() === 'video') isVideo = true;
+            }
+        }
+
+        // Resolve blob object from memory cache or main-world fetch
+        let blob = null;
+        if (url && blobCache.has(url)) {
+            blob = blobCache.get(url).blob;
+        }
+
+        if (!blob && url && (url.startsWith('blob:') || url.startsWith('http'))) {
+            try {
+                const res = await window.fetch(url);
+                blob = await res.blob();
+            } catch (fetchErr) {
+                console.warn('Toystaller: Main-world fetch failed:', fetchErr);
+            }
+        }
+
+        const ext = isVideo ? 'mp4' : 'jpg';
+        const finalFilename = filename || `whatsapp_${isVideo ? 'video' : 'image'}_${Date.now()}.${ext}`;
+
+        // Handler: DIRECT DOWNLOAD
+        if (action === 'download') {
+            try {
+                const downloadUrl = blob ? originalCreateObjectURL.call(window.URL, blob) : url;
+                if (downloadUrl) {
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = downloadUrl;
+                    a.download = finalFilename;
+                    document.body.appendChild(a);
+                    a.click();
+                    setTimeout(() => {
+                        a.remove();
+                        if (blob) window.URL.revokeObjectURL(downloadUrl);
+                    }, 4000);
+
+                    window.postMessage({
+                        type: 'toystaller_main_media_response',
+                        requestId: requestId,
+                        success: true,
+                        action: 'download',
+                        filename: finalFilename
+                    }, '*');
+                    return;
+                }
+            } catch (dlErr) {
+                console.error('Toystaller: Direct download failed:', dlErr);
+            }
+
+            window.postMessage({
+                type: 'toystaller_main_media_response',
+                requestId: requestId,
+                success: false,
+                action: 'download'
+            }, '*');
+            return;
+        }
+
+        // Handler: OPEN IN NEW TAB (convert blob to base64 Data URL)
+        if (action === 'open') {
+            if (blob) {
+                try {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        window.postMessage({
+                            type: 'toystaller_main_media_response',
+                            requestId: requestId,
+                            success: true,
+                            action: 'open',
+                            dataUrl: reader.result,
+                            mimeType: blob.type || (isVideo ? 'video/mp4' : 'image/jpeg'),
+                            isVideo: isVideo,
+                            filename: finalFilename
+                        }, '*');
+                    };
+                    reader.readAsDataURL(blob);
+                    return;
+                } catch (readErr) {
+                    console.error('Toystaller: FileReader error:', readErr);
+                }
+            }
+
+            // Fallback: If blob conversion fails, trigger direct download so user doesn't miss media
+            if (url) {
+                try {
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    a.download = finalFilename;
+                    document.body.appendChild(a);
+                    a.click();
+                    setTimeout(() => a.remove(), 2000);
+                } catch (e2) {}
+            }
+
+            window.postMessage({
+                type: 'toystaller_main_media_response',
+                requestId: requestId,
+                success: false,
+                action: 'open'
+            }, '*');
+        }
+    });
+
+    // --- 3. React Fiber & DOM Extraction ---
+    const getPlatform = () => {
+        return window.ToystallerPlatform || {
+            name: 'generic',
+            shouldSkipReactValue() { return false; },
+            looksLikeReactVideo(val) { return val.toLowerCase().includes('.mp4'); },
+            looksLikeReactImage(val, key) { return key.toLowerCase().includes('image') || val.toLowerCase().includes('.jpg'); },
+            extractPriorityReactUrl() { return null; },
+            extractVideoUrlFromDOM(el) { return el && (el.currentSrc || el.src); },
+            isValidVideo() { return true; },
+            getInterceptUrls() { return []; }
+        };
+    };
+
     function searchObjForVideoUrl(obj, seen = new Set(), depth = 0, isVideoContext = true) {
-        if (depth > 8 || !isSafeObject(obj)) return null;
+        if (depth > 12 || !obj || typeof obj !== 'object') return null;
         if (seen.has(obj)) return null;
         seen.add(obj);
 
         const platform = getPlatform();
-
-        // Check if the current object directly has priority master video candidates (with audio)
-        if (platform.extractPriorityReactUrl) {
-            const priority = platform.extractPriorityReactUrl(obj, isVideoContext);
-            if (priority) return priority;
-        }
 
         if (Array.isArray(obj)) {
             for (let item of obj) {
@@ -192,7 +212,7 @@
             }
         } else {
             for (let key of Object.keys(obj)) {
-                if (SKIP_KEYS.has(key)) continue;
+                if (key === 'return' || key === 'sibling' || key === '_owner' || key === 'parent') continue;
 
                 const val = obj[key];
                 if (typeof val === 'string') {
@@ -209,7 +229,11 @@
                             return val;
                         }
                     }
-                } else if (typeof val === 'object' && val !== null) {
+                } else if (typeof val === 'object') {
+                    const platformFound = platform.extractPriorityReactUrl && platform.extractPriorityReactUrl(val, isVideoContext);
+                    if (platformFound) {
+                        return platformFound;
+                    }
                     const nested = searchObjForVideoUrl(val, seen, depth + 1, isVideoContext);
                     if (nested) return nested;
                 }
@@ -218,204 +242,43 @@
         return null;
     }
 
-    function searchObjForAudioUrl(obj, seen = new Set(), depth = 0) {
-        if (depth > 8 || !isSafeObject(obj)) return null;
-        if (seen.has(obj)) return null;
-        seen.add(obj);
-
-        const platform = getPlatform();
-
-        if (Array.isArray(obj)) {
-            for (let item of obj) {
-                const res = searchObjForAudioUrl(item, seen, depth + 1);
-                if (res) return res;
-            }
-        } else {
-            if (platform.extractPriorityAudioUrl) {
-                const found = platform.extractPriorityAudioUrl(obj);
-                if (found) return found;
-            }
-            for (let key of Object.keys(obj)) {
-                if (SKIP_KEYS.has(key)) continue;
-                const val = obj[key];
-                if (typeof val === 'string') {
-                    if (platform.isValidAudio && platform.isValidAudio(val)) {
-                        return val;
-                    }
-                } else if (typeof val === 'object' && val !== null) {
-                    const nested = searchObjForAudioUrl(val, seen, depth + 1);
-                    if (nested) return nested;
-                }
-            }
-        }
-        return null;
-    }
-
-    function searchObjForDashVideoUrl(obj, seen = new Set(), depth = 0) {
-        if (depth > 8 || !isSafeObject(obj)) return null;
-        if (seen.has(obj)) return null;
-        seen.add(obj);
-
-        const platform = getPlatform();
-
-        if (Array.isArray(obj)) {
-            for (let item of obj) {
-                const res = searchObjForDashVideoUrl(item, seen, depth + 1);
-                if (res) return res;
-            }
-        } else {
-            if (platform.extractDashVideoFromReact) {
-                const found = platform.extractDashVideoFromReact(obj);
-                if (found) return found;
-            }
-            for (let key of Object.keys(obj)) {
-                if (SKIP_KEYS.has(key)) continue;
-                const val = obj[key];
-                if (typeof val === 'string') {
-                    if (platform.isValidDashVideo && platform.isValidDashVideo(val)) {
-                        return val;
-                    }
-                } else if (typeof val === 'object' && val !== null) {
-                    const nested = searchObjForDashVideoUrl(val, seen, depth + 1);
-                    if (nested) return nested;
-                }
-            }
-        }
-        return null;
-    }
-
-    function extractMediaBundle(el, isVideoContext = true) {
-        if (!el) return { url: null, audioUrl: null, mutedUrl: null };
-        try {
-            const platform = getPlatform();
-
-            // Pass 1: Try React Fiber for PROGRESSIVE videos (complete with audio)
-            let progressiveUrl = null;
-            let current = el;
-            for (let i = 0; i < 14 && current; i++) {
-                const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
-                    k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-                if (key && current[key]) {
-                    const targetObj = current[key].memoizedProps || current[key];
-                    const found = searchObjForVideoUrl(targetObj, new Set(), 0, isVideoContext);
-                    if (found && !found.toLowerCase().includes('stream_type=dash')) {
-                        progressiveUrl = found;
-                        break;
-                    }
-                }
-                current = current.parentElement;
-            }
-
-            // Pass 2: Check DOM scripts for progressive videos matching videoId
-            if (!progressiveUrl && platform.extractVideoUrlFromDOM) {
-                const domUrl = platform.extractVideoUrlFromDOM(el);
-                if (domUrl && !domUrl.toLowerCase().includes('stream_type=dash')) {
-                    progressiveUrl = domUrl;
-                }
-            }
-
-            // Pass 3: Audio URL extraction
-            let audioUrl = null;
-            current = el;
-            for (let i = 0; i < 14 && current; i++) {
-                const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
-                    k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-                if (key && current[key]) {
-                    const targetObj = current[key].memoizedProps || current[key];
-                    const foundAudio = searchObjForAudioUrl(targetObj, new Set(), 0);
-                    if (foundAudio) {
-                        audioUrl = foundAudio;
-                        break;
-                    }
-                }
-                current = current.parentElement;
-            }
-            if (!audioUrl && platform.extractAudioUrlFromDOM) {
-                audioUrl = platform.extractAudioUrlFromDOM(el);
-            }
-
-            // Pass 4: DASH / Muted Video URL extraction
-            let dashVideoUrl = null;
-            current = el;
-            for (let i = 0; i < 14 && current; i++) {
-                const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
-                    k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-                if (key && current[key]) {
-                    const targetObj = current[key].memoizedProps || current[key];
-                    const foundDash = searchObjForDashVideoUrl(targetObj, new Set(), 0);
-                    if (foundDash) {
-                        dashVideoUrl = foundDash;
-                        break;
-                    }
-                }
-                current = current.parentElement;
-            }
-            if (!dashVideoUrl && platform.extractDashVideoFromDOM) {
-                dashVideoUrl = platform.extractDashVideoFromDOM(el);
-            }
-
-            // Resolution:
-            // 1. If progressiveUrl exists: it is the master video with audio!
-            // 2. If progressiveUrl does not exist (e.g. 2-hour long video): fall back to dashVideoUrl!
-            const finalUrl = progressiveUrl || dashVideoUrl;
-            const finalMuted = dashVideoUrl || null;
-
-            return {
-                url: finalUrl,
-                audioUrl: audioUrl,
-                mutedUrl: finalMuted
-            };
-        } catch (err) {
-            console.warn('Toystaller: extractMediaBundle error:', err);
-            return { url: null, audioUrl: null, mutedUrl: null };
-        }
-    }
-
     function extractVideoUrlFromReact(el, isVideoContext = true) {
-        const bundle = extractMediaBundle(el, isVideoContext);
-        return bundle.url;
-    }
+        let current = el;
+        const platform = getPlatform();
 
-    function extractAudioUrlFromReact(el) {
-        const bundle = extractMediaBundle(el, true);
-        return bundle.audioUrl;
-    }
+        if (platform.extractVideoUrlFromDOM) {
+            const domUrl = platform.extractVideoUrlFromDOM(el);
+            if (domUrl) return domUrl;
+        }
 
-    // Facebook-specific: Parse relay data from <script> tags to find progressive video URLs
+        for (let i = 0; i < 12 && current; i++) {
+            const key = Object.keys(current).find(k => k.startsWith('__reactProps$') ||
+                k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+            if (key && current[key]) {
+                const found = searchObjForVideoUrl(current[key], new Set(), 0, isVideoContext);
+                if (found) return found;
+            }
+            current = current.parentElement;
+        }
+
+        return null;
+    }
 
     window.addEventListener('message', (e) => {
-        try {
-            if (!e.data || e.data.type !== 'magic_get_react_url' || !e.data.id) return;
-            const id = e.data.id;
-            const isVideo = e.data.isVideo !== undefined ? e.data.isVideo : true;
-            const el = document.querySelector(`[data-magic-id="${id}"]`);
+        if (!e.data || e.data.type !== 'magic_get_react_url' || !e.data.id) return;
+        const id = e.data.id;
+        const isVideo = e.data.isVideo !== undefined ? e.data.isVideo : true;
+        const el = document.querySelector(`[data-magic-id="${id}"]`);
 
-            let result = { url: null, audioUrl: null, mutedUrl: null };
-            if (el) {
-                if (isVideo) {
-                    result = extractMediaBundle(el, true);
-                } else {
-                    result.url = extractVideoUrlFromReact(el, false);
-                }
-            }
-
-            window.postMessage({
-                type: 'magic_response_react_url_' + id,
-                url: result.url,
-                audioUrl: result.audioUrl,
-                mutedUrl: result.mutedUrl
-            }, '*');
-        } catch (err) {
-            console.warn('Toystaller: window message handler error:', err);
-            if (e && e.data && e.data.id) {
-                window.postMessage({
-                    type: 'magic_response_react_url_' + e.data.id,
-                    url: null,
-                    audioUrl: null,
-                    mutedUrl: null
-                }, '*');
-            }
+        let url = null;
+        if (el) {
+            url = extractVideoUrlFromReact(el, isVideo);
         }
+
+        window.postMessage({
+            type: 'magic_response_react_url_' + id,
+            url: url
+        }, '*');
     });
 
 })();

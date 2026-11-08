@@ -596,13 +596,16 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             if (!val || typeof val !== 'object') return null;
 
             if (isVideoContext) {
+                // If val wraps videoData, check videoData directly
+                const target = val.videoData || val.video || (val.creation_story && val.creation_story.attachments && val.creation_story.attachments[0] && val.creation_story.attachments[0].media) || val;
+
                 // 1. Facebook HD Progressive URL (highest quality master WITH AUDIO)
                 const hdCandidates = [
-                    val.playable_url_quality_hd,
-                    val.browser_native_hd_url,
-                    val.hd_src,
-                    val.hd_src_no_ratelimit,
-                    val.progressive_download_url
+                    target.playable_url_quality_hd,
+                    target.browser_native_hd_url,
+                    target.hd_src,
+                    target.hd_src_no_ratelimit,
+                    target.progressive_download_url
                 ];
                 for (const c of hdCandidates) {
                     if (typeof c === 'string') {
@@ -612,8 +615,8 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 }
 
                 // 2. Multi-version video candidate array (WITH AUDIO)
-                if (Array.isArray(val.video_versions) && val.video_versions.length > 0) {
-                    const valid = val.video_versions
+                if (Array.isArray(target.video_versions) && target.video_versions.length > 0) {
+                    const valid = target.video_versions
                         .map(v => (v && typeof v.url === 'string') ? this.cleanVideoUrl(v.url) : null)
                         .filter(u => u && this.isValidVideo(u) && !u.toLowerCase().includes('stream_type=dash'));
                     if (valid.length > 0) {
@@ -623,13 +626,13 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
 
                 // 3. Facebook SD Progressive URLs (WITH AUDIO)
                 const sdCandidates = [
-                    val.playable_url,
-                    val.browser_native_sd_url,
-                    val.sd_src,
-                    val.sd_src_no_ratelimit,
-                    val.progressiveUrl,
-                    val.video_url,
-                    val.videoUrl
+                    target.playable_url,
+                    target.browser_native_sd_url,
+                    target.sd_src,
+                    target.sd_src_no_ratelimit,
+                    target.progressiveUrl,
+                    target.video_url,
+                    target.videoUrl
                 ];
                 for (const c of sdCandidates) {
                     if (typeof c === 'string') {
@@ -881,7 +884,9 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             for (const s of scripts) {
                 const text = s.textContent;
                 if (text && text.includes(videoId)) {
-                    const found = parseScriptText(text);
+                    const idx = text.indexOf(videoId);
+                    const scope = (idx >= 0) ? text.slice(Math.max(0, idx - 4000), idx + 8000) : text;
+                    const found = parseScriptText(scope) || parseScriptText(text);
                     if (found) return found;
                 }
             }
@@ -892,30 +897,47 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
         extractVideoId(el) {
             if (!el) return null;
 
-            // 1. Check React Fiber on el and immediate parents (up to 7 levels, stopping at post boundary)
+            // 1. Check React Fiber ancestor chain starting directly at el
+            const idFromObj = (obj, seen = new Set(), depth = 0) => {
+                if (!obj || typeof obj !== 'object' || depth > 8 || seen.has(obj)) return null;
+                seen.add(obj);
+                if (obj.video_id && typeof obj.video_id === 'string' && /^\d+$/.test(obj.video_id)) return obj.video_id;
+                if (obj.videoId && typeof obj.videoId === 'string' && /^\d+$/.test(obj.videoId)) return obj.videoId;
+                if (obj.videoID && typeof obj.videoID === 'string' && /^\d+$/.test(obj.videoID)) return obj.videoID;
+                if (obj.target_id && typeof obj.target_id === 'string' && /^\d+$/.test(obj.target_id)) return obj.target_id;
+                if (obj.story_fbid && typeof obj.story_fbid === 'string' && /^\d+$/.test(obj.story_fbid)) return obj.story_fbid;
+                for (let k of Object.keys(obj)) {
+                    if (k === 'return' || k === 'sibling' || k === '_owner' || k === 'parent' || k === 'alternate') continue;
+                    if (typeof obj[k] === 'object') {
+                        const found = idFromObj(obj[k], seen, depth + 1);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            };
+
+            const fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+            let fiber = fiberKey ? el[fiberKey] : null;
+            let fiberDepth = 0;
+            while (fiber && fiberDepth < 25) {
+                if (fiber.memoizedProps) {
+                    const id = idFromObj(fiber.memoizedProps);
+                    if (id) return id;
+                }
+                if (fiber.memoizedState) {
+                    const id = idFromObj(fiber.memoizedState);
+                    if (id) return id;
+                }
+                fiber = fiber.return;
+                fiberDepth++;
+            }
+
+            // 2. Check React Props on el and immediate parents up to post boundary
             let current = el;
             for (let i = 0; i < 7 && current; i++) {
-                const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
-                    k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-                if (key && current[key]) {
-                    const idFromObj = (obj, seen = new Set(), depth = 0) => {
-                        if (!obj || typeof obj !== 'object' || depth > 8 || seen.has(obj)) return null;
-                        seen.add(obj);
-                        if (obj.video_id && typeof obj.video_id === 'string') return obj.video_id;
-                        if (obj.videoId && typeof obj.videoId === 'string') return obj.videoId;
-                        if (obj.videoID && typeof obj.videoID === 'string') return obj.videoID;
-                        if (obj.target_id && typeof obj.target_id === 'string') return obj.target_id;
-                        if (obj.story_fbid && typeof obj.story_fbid === 'string') return obj.story_fbid;
-                        for (let k of Object.keys(obj)) {
-                            if (k === 'return' || k === 'sibling' || k === '_owner' || k === 'parent') continue;
-                            if (typeof obj[k] === 'object') {
-                                const found = idFromObj(obj[k], seen, depth + 1);
-                                if (found) return found;
-                            }
-                        }
-                        return null;
-                    };
-                    const id = idFromObj(current[key]);
+                const propsKey = Object.keys(current).find(k => k.startsWith('__reactProps$'));
+                if (propsKey && current[propsKey]) {
+                    const id = idFromObj(current[propsKey]);
                     if (id) return id;
                 }
                 if (current.getAttribute && (current.getAttribute('role') === 'article' || (current.dataset && current.dataset.pagelet && current.dataset.pagelet.startsWith('FeedUnit')))) {
@@ -924,7 +946,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 current = current.parentElement;
             }
 
-            // 2. Check DOM data attributes or closest container
+            // 3. Check DOM data attributes or closest container
             current = el;
             for (let i = 0; i < 15 && current; i++) {
                 if (current.dataset && (current.dataset.videoId || current.dataset.video_id)) {
@@ -941,7 +963,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 current = current.parentElement;
             }
 
-            // 3. Fallback to URL route if on a dedicated Reel or Watch URL
+            // 4. Fallback to URL route if on a dedicated Reel or Watch URL
             const urlMatch = window.location.href.match(/(?:videos\/|watch\/?\?v=|reel\/)([a-zA-Z0-9]+)/);
             if (urlMatch && urlMatch[1]) return urlMatch[1];
 

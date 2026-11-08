@@ -261,18 +261,6 @@
 
         if (activeAudioUrl) {
             setupAudioControls(activeAudioUrl, detectedPlatform);
-        } else if (isVideo && chrome.runtime && chrome.runtime.sendMessage) {
-            chrome.runtime.sendMessage({ action: 'getMediaUrls', mediaType: 'audio' }, (res) => {
-                if (res && res.audioUrls && res.audioUrls.length > 0) {
-                    setupAudioControls(res.audioUrls[0], detectedPlatform);
-                } else if (res && res.urls && res.urls.length > 0) {
-                    const foundAudio = res.urls.find(u => {
-                        const l = u.toLowerCase();
-                        return l.includes('/v/t42.') || l.includes('mime=audio') || l.includes('stream_type=audio');
-                    });
-                    if (foundAudio) setupAudioControls(foundAudio, detectedPlatform);
-                }
-            });
         }
 
         if (isVideo) {
