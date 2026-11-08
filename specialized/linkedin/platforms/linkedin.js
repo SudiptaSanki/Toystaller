@@ -113,10 +113,10 @@
                 if (isVideo && (lower.includes('videocover') || lower.includes('/image/') || lower.includes('.jpg') || lower.includes('.png') || lower.includes('.webp'))) {
                     return false;
                 }
-                if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('stream_type=dash') || lower.includes('bytestart') || lower.includes('/audio') || lower.includes('manifest')) {
+                if (lower.includes('.mpd') || lower.includes('stream_type=dash') || lower.includes('bytestart') || lower.includes('/audio')) {
                     return false;
                 }
-                return (lower.includes('licdn.com') && (lower.includes('playlist/vid') || lower.includes('video') || lower.includes('playback') || lower.includes('progressive'))) || lower.includes('.mp4');
+                return (lower.includes('licdn.com') && (lower.includes('playlist/vid') || lower.includes('video') || lower.includes('playback') || lower.includes('progressive') || lower.includes('.m3u8'))) || lower.includes('.mp4');
             });
         },
 
@@ -219,7 +219,7 @@
         isValidVideo(url) {
             if (!url || typeof url !== 'string' || !url.startsWith('http')) return false;
             const lower = url.toLowerCase();
-            if (lower.includes('.mpd') || lower.includes('.m3u8') || lower.includes('manifest')) return false;
+            if (lower.includes('.mpd')) return false;
             if (lower.includes('/audio') || lower.includes('bytestart')) return false;
             return !(lower.includes('//www.linkedin.com') || lower.includes('//linkedin.com'));
         },
@@ -252,7 +252,7 @@
                             if (!src) continue;
                             const srcUrl = src.src || src.url || src.streamingLocation;
                             if (srcUrl && typeof srcUrl === 'string' && this.isValidVideo(srcUrl)) {
-                                if (srcUrl.includes('manifest') || srcUrl.includes('.mpd') || srcUrl.includes('/audio')) continue;
+                                if (srcUrl.includes('.mpd') || srcUrl.includes('/audio')) continue;
                                 if (src.type && src.type.includes('dash')) continue;
 
                                 const isMp4 = (src.type && src.type.includes('mp4')) || srcUrl.includes('.mp4');

@@ -179,39 +179,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         const platform = request.platform || '';
         const platformLower = platform.toLowerCase();
-        
-        // Check if this media specifically requires the Toystaller anti-hotlink player wrapper
-        const isSpecialVideoPlatform = (
-            platformLower === 'facebook' || 
-            platformLower === 'linkedin' || 
-            platformLower === 'instagram' || 
-            platformLower === 'whatsapp' ||
-            lowerUrl.includes('fbcdn.net') ||
-            lowerUrl.includes('fbsbx.com') ||
-            lowerUrl.includes('licdn.com') ||
-            lowerUrl.includes('cdninstagram.com') ||
-            lowerUrl.includes('whatsapp.net')
-        );
         const isHlsStream = lowerUrl.includes('.m3u8') || lowerUrl.includes('/manifest/') || lowerUrl.includes('/playlist/');
-
-        // CRITICAL LOGIC:
-        // Only use player.html for videos that actually require header spoofing/in-browser decoding (anti-hotlink CDNs, HLS).
-        // For ALL images (Amazon, Pexels, Unsplash, Google, etc.) and regular website videos,
-        // directly pop out the raw URL in the new tab. This avoids cross-origin embedding blocks (CORS/CORP) and guarantees 100% display!
         const isDataUrl = lowerUrl.startsWith('data:');
-        const shouldUsePlayer = (isVideo && (isSpecialVideoPlatform || isHlsStream || request.forcePlayer)) || isDataUrl;
 
-        let playerUrl = chrome.runtime.getURL('player.html') + 
-            '?url=' + encodeURIComponent(url) + 
-            (platform ? '&platform=' + encodeURIComponent(platform) : '');
-        if (request.audioUrl) {
-            playerUrl += '&audioUrl=' + encodeURIComponent(request.audioUrl);
+        let targetUrl = url;
+
+        if (isVideo) {
+            if (platformLower === 'instagram' || lowerUrl.includes('cdninstagram.com')) {
+                // Instagram Edition: direct master video URL in new tab (native browser player with spoofed Referer)
+                targetUrl = url;
+            } else if (platformLower === 'facebook' || lowerUrl.includes('fbcdn.net') || lowerUrl.includes('fbsbx.com')) {
+                // Facebook Edition: dedicated player tab with Facebook Edition badge and HD progressive master MP4
+                targetUrl = chrome.runtime.getURL('specialized/facebook/player.html') + '?url=' + encodeURIComponent(url);
+            } else if (platformLower === 'linkedin' || lowerUrl.includes('licdn.com') || isHlsStream) {
+                // LinkedIn Edition: dedicated player tab with LinkedIn Edition badge, Hls.js, and master MP4 support
+                targetUrl = chrome.runtime.getURL('specialized/linkedin/player.html') + '?url=' + encodeURIComponent(url);
+            } else if (request.forcePlayer || isDataUrl) {
+                targetUrl = chrome.runtime.getURL('player.html') + '?url=' + encodeURIComponent(url);
+            } else {
+                targetUrl = url;
+            }
         }
-        if (request.mutedUrl) {
-            playerUrl += '&mutedUrl=' + encodeURIComponent(request.mutedUrl);
-        }
-        
-        const targetUrl = shouldUsePlayer ? playerUrl : url;
 
         // Target the exact window where the click occurred (keeps incognito in incognito!)
         chrome.storage.local.get({ openInMainWindow: false }, (settings) => {

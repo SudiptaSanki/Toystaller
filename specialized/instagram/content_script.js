@@ -236,9 +236,9 @@ function injectDownloadButtons() {
                 openBtn.innerHTML = `<svg width="${iconSize}" height="${iconSize}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>`;
                 openBtn.style.cssText = makeBtnStyle('rgba(30,30,30,0.75)');
 
-                // For video elements, hide the blue button until we confirm a valid URL exists
+                // For video elements, style open button
                 if (isVideo) {
-                    openBtn.style.display = 'none';
+                    openBtn.title = 'Open video in new tab';
                 }
 
                 openBtn.addEventListener('mouseenter', () => {
@@ -277,7 +277,11 @@ function injectDownloadButtons() {
                         }, 250);
                     } else {
                         getMediaUrl((url) => {
-                            safeSendMessage({ action: 'openInNewTab', url: url });
+                            if (url) {
+                                safeSendMessage({ action: 'openInNewTab', url: url, isVideo: true, platform: 'instagram' });
+                            } else {
+                                alert('Could not find the video URL yet.\n\nTip: Make sure the video has started playing, then click the button again.');
+                            }
                         });
                     }
                 });
@@ -490,7 +494,7 @@ function injectDownloadButtons() {
             if (window.magicOverlayManager) {
                 window.magicOverlayManager.addOverlay(media, createButtonsFn);
                 if (isVideo) {
-                    setTimeout(() => {
+                    const doPreResolve = () => {
                         const overlay = window.magicOverlayManager.overlays.get(media);
                         if (overlay && overlay.container) {
                             const openBtn = overlay.container.querySelector('.magic-open-btn');
@@ -498,7 +502,10 @@ function injectDownloadButtons() {
                                 preResolveVideoUrl(openBtn);
                             }
                         }
-                    }, 100);
+                    };
+                    setTimeout(doPreResolve, 200);
+                    media.addEventListener('play', doPreResolve, { passive: true });
+                    media.addEventListener('playing', doPreResolve, { passive: true });
                 }
             }
         }

@@ -28,7 +28,12 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://*.facebook.com/*"],
+      "matches": [
+        "*://*.facebook.com/*",
+        "*://facebook.com/*",
+        "*://*.messenger.com/*",
+        "*://messenger.com/*"
+      ],
       "js": [
         "specialized/facebook/platforms/facebook.js",
         "specialized/facebook/overlay_manager.js",
@@ -37,7 +42,10 @@
       "run_at": "document_start"
     },
     {
-      "matches": ["*://*.linkedin.com/*"],
+      "matches": [
+        "*://*.linkedin.com/*",
+        "*://linkedin.com/*"
+      ],
       "js": [
         "specialized/linkedin/platforms/linkedin.js",
         "specialized/linkedin/overlay_manager.js",
@@ -46,7 +54,10 @@
       "run_at": "document_start"
     },
     {
-      "matches": ["*://*.instagram.com/*"],
+      "matches": [
+        "*://*.instagram.com/*",
+        "*://instagram.com/*"
+      ],
       "js": [
         "specialized/instagram/platforms/instagram.js",
         "specialized/instagram/overlay_manager.js",
@@ -55,7 +66,11 @@
       "run_at": "document_start"
     },
     {
-      "matches": ["*://web.whatsapp.com/*"],
+      "matches": [
+        "*://web.whatsapp.com/*",
+        "*://*.whatsapp.com/*",
+        "*://whatsapp.com/*"
+      ],
       "js": [
         "specialized/whatsapp/platforms/whatsapp.js",
         "specialized/whatsapp/core/overlay_manager.js",
@@ -68,8 +83,15 @@
       "matches": ["<all_urls>"],
       "exclude_matches": [
         "*://*.facebook.com/*",
+        "*://facebook.com/*",
+        "*://*.messenger.com/*",
+        "*://messenger.com/*",
         "*://*.linkedin.com/*",
+        "*://linkedin.com/*",
         "*://*.instagram.com/*",
+        "*://instagram.com/*",
+        "*://*.whatsapp.com/*",
+        "*://whatsapp.com/*",
         "*://web.whatsapp.com/*"
       ],
       "js": [
@@ -92,6 +114,11 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "specialized/facebook/player.html",
+        "specialized/facebook/player.js",
+        "specialized/linkedin/player.html",
+        "specialized/linkedin/player.js",
+        "specialized/linkedin/hls.min.js",
         "specialized/linkedin/platforms/linkedin.js",
         "specialized/linkedin/page_interceptor.js",
         "specialized/facebook/platforms/facebook.js",

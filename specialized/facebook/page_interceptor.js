@@ -116,17 +116,7 @@
 
         const foundSet = new Set();
 
-        // 1. Priority: Named progressive HD video keys scan
-        const videoRegex = /"(browser_native_hd_url|playable_url_quality_hd|progressive_download_url|browser_native_sd_url|playable_url|hd_src)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
-        let m;
-        while ((m = videoRegex.exec(clean)) !== null) {
-            try {
-                const url = cleanVideoUrl(JSON.parse('"' + m[2] + '"'));
-                if (url && isValidVideo(url)) foundSet.add(url);
-            } catch (err) {}
-        }
-
-        // 2. Direct scan for any CDN MP4 / M4V URL
+        // 1. Direct scan for any CDN MP4 / M4V URL
         const cdnRegex = /"(https:(?:\\\/\\\/|\/\/)[^"]+?(?:fbcdn\.net|fbsbx\.com)[^"]+?\.(?:mp4|m4v)[^"]*)"/g;
         let cdnM;
         while ((cdnM = cdnRegex.exec(clean)) !== null) {
@@ -137,6 +127,16 @@
                 const unescaped = cleanVideoUrl(cdnM[1]);
                 if (unescaped && isValidVideo(unescaped)) foundSet.add(unescaped);
             }
+        }
+
+        // 2. Named keys scan: playable_url_quality_hd, browser_native_hd_url, etc.
+        const videoRegex = /"(playable_url_quality_hd|browser_native_hd_url|playable_url|browser_native_sd_url|hd_src|progressive_download_url)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
+        let m;
+        while ((m = videoRegex.exec(clean)) !== null) {
+            try {
+                const url = cleanVideoUrl(JSON.parse('"' + m[2] + '"'));
+                if (url && isValidVideo(url)) foundSet.add(url);
+            } catch (err) {}
         }
 
         // 3. Try parsing JSON chunks for deep objects
@@ -259,14 +259,8 @@
             // Check priority object extractor first
             const platformFound = platform.extractPriorityReactUrl && platform.extractPriorityReactUrl(obj, isVideoContext);
             if (platformFound) {
-                if (typeof platformFound === 'object' && platformFound.url) {
-                    if (!isVideoContext || isValidVideo(platformFound.url)) {
-                        return platformFound;
-                    }
-                } else if (typeof platformFound === 'string') {
-                    if (!isVideoContext || isValidVideo(platformFound)) {
-                        return platformFound;
-                    }
+                if (!isVideoContext || isValidVideo(platformFound)) {
+                    return platformFound;
                 }
             }
 
@@ -302,7 +296,7 @@
         let current = el;
         const platform = getPlatform();
 
-        // 1. Traverse React Fiber properties FIRST (attached directly to actual playing video element)
+        // 1. Traverse React Fiber properties FIRST (attached to actual playing video element)
         for (let i = 0; i < 14 && current; i++) {
             const key = Object.keys(current).find(k =>
                 k.startsWith('__reactProps$') || 
@@ -312,19 +306,9 @@
             if (key && current[key]) {
                 const found = searchObjForVideoUrl(current[key], new Set(), 0, isVideoContext);
                 if (found) {
-                    if (typeof found === 'object' && found.url) {
-                        const clean = cleanVideoUrl(found.url);
-                        if (!isVideoContext || isValidVideo(clean)) {
-                            return {
-                                url: clean,
-                                audioUrl: found.audioUrl ? cleanVideoUrl(found.audioUrl) : null
-                            };
-                        }
-                    } else if (typeof found === 'string') {
-                        const clean = cleanVideoUrl(found);
-                        if (!isVideoContext || isValidVideo(clean)) {
-                            return { url: clean, audioUrl: null };
-                        }
+                    const clean = cleanVideoUrl(found);
+                    if (!isVideoContext || isValidVideo(clean)) {
+                        return clean;
                     }
                 }
             }
@@ -336,7 +320,7 @@
             const domUrl = platform.extractVideoUrlFromDOM(el);
             if (domUrl) {
                 const clean = cleanVideoUrl(domUrl);
-                if (isValidVideo(clean)) return { url: clean, audioUrl: null };
+                if (isValidVideo(clean)) return clean;
             }
         }
 
@@ -350,32 +334,19 @@
         const isVideo = e.data.isVideo !== undefined ? e.data.isVideo : true;
         const el = document.querySelector(`[data-magic-id="${id}"]`);
 
-        let result = null;
-        if (el) {
-            result = extractVideoUrlFromReact(el, isVideo);
-        }
-
         let url = null;
-        let audioUrl = null;
-        if (result) {
-            if (typeof result === 'object') {
-                url = result.url || null;
-                audioUrl = result.audioUrl || null;
-            } else if (typeof result === 'string') {
-                url = result;
-            }
+        if (el) {
+            url = extractVideoUrlFromReact(el, isVideo);
         }
 
         // Guarantee that non-video internal URLs are never sent back for video requests
         if (isVideo && url && !isValidVideo(url)) {
             url = null;
-            audioUrl = null;
         }
 
         window.postMessage({
             type: 'magic_response_react_url_' + id,
-            url: url,
-            audioUrl: audioUrl
+            url: url
         }, '*');
     });
 

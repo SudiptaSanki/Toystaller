@@ -234,7 +234,7 @@ function injectDownloadButtons() {
                             openBtn.style.backgroundColor = 'rgba(30,30,30,0.75)';
                             if (url) {
                                 openBtn.__resolvedVideoUrl = url;
-                                safeSendMessage({ action: 'openInNewTab', url: url, isVideo: true });
+                                safeSendMessage({ action: 'openInNewTab', url: url, isVideo: true, platform: 'linkedin' });
                             } else {
                                 alert('Could not resolve video URL. If the video is paused, please click play and try again.');
                             }
