@@ -864,53 +864,76 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 return null;
             };
 
-            // 1. Identify specific Video ID from element or enclosing post container
-            let videoId = null;
-            let current = el;
-            for (let i = 0; i < 20 && current; i++) {
-                if (current.dataset && (current.dataset.videoId || current.dataset.video_id)) {
-                    videoId = current.dataset.videoId || current.dataset.video_id;
-                    break;
-                }
-                const link = current.querySelector ? current.querySelector('a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"], a[href*="story_fbid="], a[href*="/posts/"]') : null;
-                if (link && link.href) {
-                    const m = link.href.match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=)(\d+)/);
-                    if (m) { videoId = m[1]; break; }
-                }
-                current = current.parentElement;
-            }
-
-            if (!videoId) {
-                const urlMatch = window.location.href.match(/(?:videos\/|watch\/?\?v=|reel\/)(\d+)/);
-                if (urlMatch) videoId = urlMatch[1];
-            }
+            const videoId = this.extractVideoId(el);
+            if (!videoId) return null;
 
             const scripts = document.querySelectorAll('script[type="application/json"], script:not([src])');
-
-            // Pass 1: Scan scripts containing the specific videoId
-            if (videoId) {
-                for (const s of scripts) {
-                    const text = s.textContent;
-                    if (text && text.includes(videoId)) {
-                        const found = parseScriptText(text);
-                        if (found) return found;
-                    }
-                }
-            }
-
-            // Pass 2: High-confidence progressive playable keys across all scripts
             for (const s of scripts) {
                 const text = s.textContent;
-                if (text && (
-                    text.includes('playable_url_quality_hd') ||
-                    text.includes('browser_native_hd_url') ||
-                    text.includes('progressive_download_url') ||
-                    text.includes('playable_url')
-                )) {
+                if (text && text.includes(videoId)) {
                     const found = parseScriptText(text);
                     if (found) return found;
                 }
             }
+            return null;
+        },
+
+        // --- Dedicated Video ID Extractor for Facebook ---
+        extractVideoId(el) {
+            if (!el) return null;
+
+            // 1. Check React Fiber on el and immediate parents (up to 7 levels, stopping at post boundary)
+            let current = el;
+            for (let i = 0; i < 7 && current; i++) {
+                const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
+                    k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                if (key && current[key]) {
+                    const idFromObj = (obj, seen = new Set(), depth = 0) => {
+                        if (!obj || typeof obj !== 'object' || depth > 8 || seen.has(obj)) return null;
+                        seen.add(obj);
+                        if (obj.video_id && typeof obj.video_id === 'string') return obj.video_id;
+                        if (obj.videoId && typeof obj.videoId === 'string') return obj.videoId;
+                        if (obj.videoID && typeof obj.videoID === 'string') return obj.videoID;
+                        if (obj.target_id && typeof obj.target_id === 'string') return obj.target_id;
+                        if (obj.story_fbid && typeof obj.story_fbid === 'string') return obj.story_fbid;
+                        for (let k of Object.keys(obj)) {
+                            if (k === 'return' || k === 'sibling' || k === '_owner' || k === 'parent') continue;
+                            if (typeof obj[k] === 'object') {
+                                const found = idFromObj(obj[k], seen, depth + 1);
+                                if (found) return found;
+                            }
+                        }
+                        return null;
+                    };
+                    const id = idFromObj(current[key]);
+                    if (id) return id;
+                }
+                if (current.getAttribute && (current.getAttribute('role') === 'article' || (current.dataset && current.dataset.pagelet && current.dataset.pagelet.startsWith('FeedUnit')))) {
+                    break;
+                }
+                current = current.parentElement;
+            }
+
+            // 2. Check DOM data attributes or closest container
+            current = el;
+            for (let i = 0; i < 15 && current; i++) {
+                if (current.dataset && (current.dataset.videoId || current.dataset.video_id)) {
+                    return current.dataset.videoId || current.dataset.video_id;
+                }
+                const link = current.querySelector ? current.querySelector('a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"], a[href*="story_fbid="], a[href*="/posts/"], a[href*="fbid="]') : null;
+                if (link && link.href) {
+                    const m = link.href.match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=|fbid=)(\d+)/);
+                    if (m && m[1]) return m[1];
+                }
+                if (current.getAttribute && (current.getAttribute('role') === 'article' || (current.dataset && current.dataset.pagelet && current.dataset.pagelet.startsWith('FeedUnit')))) {
+                    break;
+                }
+                current = current.parentElement;
+            }
+
+            // 3. Fallback to URL route if on a dedicated Reel or Watch URL
+            const urlMatch = window.location.href.match(/(?:videos\/|watch\/?\?v=|reel\/)(\d+)/);
+            if (urlMatch && urlMatch[1]) return urlMatch[1];
 
             return null;
         },
@@ -965,10 +988,13 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 return null;
             };
 
+            const videoId = this.extractVideoId(el);
+            if (!videoId) return null;
+
             const scripts = document.querySelectorAll('script[type="application/json"], script:not([src])');
             for (const s of scripts) {
                 const text = s.textContent;
-                if (text && (text.includes('playback_url') || text.includes('representations') || text.includes('base_url') || text.includes('stream_url'))) {
+                if (text && text.includes(videoId) && (text.includes('playback_url') || text.includes('representations') || text.includes('base_url') || text.includes('stream_url'))) {
                     const found = parseDashScriptText(text);
                     if (found) return found;
                 }
@@ -1031,54 +1057,17 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 return null;
             };
 
-            let videoId = null;
-            let current = el;
-            for (let i = 0; i < 20 && current; i++) {
-                if (current.dataset && (current.dataset.videoId || current.dataset.video_id)) {
-                    videoId = current.dataset.videoId || current.dataset.video_id;
-                    break;
-                }
-                const link = current.querySelector ? current.querySelector('a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"], a[href*="story_fbid="], a[href*="/posts/"]') : null;
-                if (link && link.href) {
-                    const m = link.href.match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=)(\d+)/);
-                    if (m) { videoId = m[1]; break; }
-                }
-                current = current.parentElement;
-            }
-
-            if (!videoId) {
-                const urlMatch = window.location.href.match(/(?:videos\/|watch\/?\?v=|reel\/)(\d+)/);
-                if (urlMatch) videoId = urlMatch[1];
-            }
+            const videoId = this.extractVideoId(el);
+            if (!videoId) return null;
 
             const scripts = document.querySelectorAll('script[type="application/json"], script:not([src])');
-
-            // Pass 1: Scan scripts containing videoId
-            if (videoId) {
-                for (const s of scripts) {
-                    const text = s.textContent;
-                    if (text && text.includes(videoId)) {
-                        const found = parseAudioScriptText(text);
-                        if (found) return found;
-                    }
+            for (const s of scripts) {
+                const text = s.textContent;
+                if (text && text.includes(videoId)) {
+                    const found = parseAudioScriptText(text);
+                    if (found) return found;
                 }
             }
-
-            // Pass 2: Dedicated pages
-            const isDedicatedPage = window.location.pathname.includes('/reel') ||
-                                    window.location.pathname.includes('/watch') ||
-                                    window.location.pathname.includes('/videos/') ||
-                                    (this.hasActiveModal && this.hasActiveModal());
-            if (isDedicatedPage) {
-                for (const s of scripts) {
-                    const text = s.textContent;
-                    if (text && (text.includes('audio') || text.includes('/v/t42.') || text.includes('representations'))) {
-                        const found = parseAudioScriptText(text);
-                        if (found) return found;
-                    }
-                }
-            }
-
             return null;
         }
     };

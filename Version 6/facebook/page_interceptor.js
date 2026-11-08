@@ -235,10 +235,21 @@
         if (!el) return { url: null, audioUrl: null, mutedUrl: null };
         const platform = getPlatform();
 
+        function isPostBoundary(node) {
+            if (!node || node === document.body || node === document.documentElement) return true;
+            if (node.getAttribute) {
+                const role = (node.getAttribute('role') || '').toLowerCase();
+                if (role === 'feed' || role === 'main') return true;
+                const pagelet = (node.getAttribute('data-pagelet') || '');
+                if (pagelet.startsWith('Feed') && !pagelet.startsWith('FeedUnit')) return true;
+            }
+            return false;
+        }
+
         // Pass 1: Try React Fiber for PROGRESSIVE videos (complete with audio)
         let progressiveUrl = null;
         let current = el;
-        for (let i = 0; i < 20 && current; i++) {
+        for (let i = 0; i < 8 && current && !isPostBoundary(current); i++) {
             const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
                 k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
             if (key && current[key]) {
@@ -248,10 +259,13 @@
                     break;
                 }
             }
+            if (current.getAttribute && (current.getAttribute('role') === 'article' || (current.dataset && current.dataset.pagelet && (current.dataset.pagelet.startsWith('FeedUnit') || current.dataset.pagelet.startsWith('Reel'))))) {
+                break;
+            }
             current = current.parentElement;
         }
 
-        // Pass 2: Check DOM scripts for progressive videos (playable_url_quality_hd, browser_native_hd_url, playable_url)
+        // Pass 2: Check DOM scripts for progressive videos matching videoId
         if (!progressiveUrl && platform.extractVideoUrlFromDOM) {
             const domUrl = platform.extractVideoUrlFromDOM(el);
             if (domUrl && !domUrl.toLowerCase().includes('stream_type=dash')) {
@@ -262,7 +276,7 @@
         // Pass 3: Audio URL extraction
         let audioUrl = null;
         current = el;
-        for (let i = 0; i < 20 && current; i++) {
+        for (let i = 0; i < 8 && current && !isPostBoundary(current); i++) {
             const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
                 k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
             if (key && current[key]) {
@@ -271,6 +285,9 @@
                     audioUrl = foundAudio;
                     break;
                 }
+            }
+            if (current.getAttribute && (current.getAttribute('role') === 'article' || (current.dataset && current.dataset.pagelet && (current.dataset.pagelet.startsWith('FeedUnit') || current.dataset.pagelet.startsWith('Reel'))))) {
+                break;
             }
             current = current.parentElement;
         }
@@ -281,7 +298,7 @@
         // Pass 4: DASH / Muted Video URL extraction
         let dashVideoUrl = null;
         current = el;
-        for (let i = 0; i < 20 && current; i++) {
+        for (let i = 0; i < 8 && current && !isPostBoundary(current); i++) {
             const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
                 k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
             if (key && current[key]) {
@@ -289,6 +306,9 @@
                     dashVideoUrl = platform.extractDashVideoFromReact(current[key]);
                     if (dashVideoUrl) break;
                 }
+            }
+            if (current.getAttribute && (current.getAttribute('role') === 'article' || (current.dataset && current.dataset.pagelet && (current.dataset.pagelet.startsWith('FeedUnit') || current.dataset.pagelet.startsWith('Reel'))))) {
+                break;
             }
             current = current.parentElement;
         }

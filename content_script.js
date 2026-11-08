@@ -440,11 +440,6 @@ function injectDownloadButtons() {
                 openBtn.innerHTML = `<svg width="${iconSize}" height="${iconSize}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>`;
                 openBtn.style.cssText = makeBtnStyle('rgba(30,30,30,0.75)');
 
-                // For video elements, hide the blue button until we confirm a valid URL exists
-                if (isVideo) {
-                    openBtn.style.display = 'none';
-                }
-
                 openBtn.addEventListener('mouseenter', () => {
                     openBtn.style.opacity = '1';
                     openBtn.style.backgroundColor = 'rgba(52, 152, 219, 0.95)';
@@ -466,29 +461,8 @@ function injectDownloadButtons() {
                             platform: platformName 
                         });
                     } else {
-                        const currentPost = findPostPermalink(media);
-                        const currentSrc = media.currentSrc || media.src || '';
-                        const isStale = (openBtn.__lastCurrentSrc && openBtn.__lastCurrentSrc !== currentSrc) ||
-                                        (openBtn.__lastPostUrl && openBtn.__lastPostUrl !== currentPost);
-
-                        if (openBtn.__resolvedVideoUrl && !isStale) {
-                            safeSendMessage({ 
-                                action: 'openInNewTab', 
-                                url: openBtn.__resolvedVideoUrl, 
-                                audioUrl: openBtn.__resolvedAudioUrl || null,
-                                mutedUrl: openBtn.__resolvedMutedUrl || null,
-                                isVideo: true, 
-                                platform: platformName 
-                            });
-                            return;
-                        }
                         getMediaUrl((url, audioUrl, mutedUrl) => {
                             if (!url) return;
-                            openBtn.__resolvedVideoUrl = url;
-                            openBtn.__resolvedAudioUrl = audioUrl || null;
-                            openBtn.__resolvedMutedUrl = mutedUrl || null;
-                            openBtn.__lastCurrentSrc = currentSrc;
-                            openBtn.__lastPostUrl = currentPost;
                             safeSendMessage({ 
                                 action: 'openInNewTab', 
                                 url: url, 
@@ -604,23 +578,6 @@ function injectDownloadButtons() {
                 return buttons;
             };
 
-            // Pre-resolve video URL to conditionally show/hide the blue button
-            const preResolveVideoUrl = (openBtn) => {
-                if (!isVideo) return;
-                getMediaUrl((url, audioUrl, mutedUrl) => {
-                    if (url) {
-                        // Cache the resolved URL and show the button
-                        openBtn.__resolvedVideoUrl = url;
-                        openBtn.__resolvedAudioUrl = audioUrl || null;
-                        openBtn.__resolvedMutedUrl = mutedUrl || null;
-                        openBtn.__lastCurrentSrc = media.currentSrc || media.src || '';
-                        openBtn.__lastPostUrl = findPostPermalink(media);
-                        openBtn.style.display = 'flex';
-                    }
-                    // If no URL found, button stays hidden
-                }, true); // Silent check
-            };
-
             const findPostPermalink = (mediaEl) => {
                 let cur = mediaEl;
                 for (let i = 0; i < 25 && cur; i++) {
@@ -708,17 +665,19 @@ function injectDownloadButtons() {
                         // Check if any candidate explicitly matches the post or video ID
                         let matchedVideos = [];
                         const postUrl = findPostPermalink ? findPostPermalink(media) : null;
-                        const idMatch = (postUrl || window.location.href).match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=)(\d+)/);
+                        const idMatch = (postUrl || window.location.href).match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=|fbid=)(\d+)/);
                         if (idMatch && idMatch[1]) {
                             matchedVideos = platformVideos.filter(u => u.includes(idMatch[1]));
                         }
 
-                        const targetPool = matchedVideos.length > 0 ? matchedVideos : platformVideos.slice(-5);
-                        const best = pickBestVideoUrl(targetPool) || pickBestVideoUrl(platformVideos);
-                        const bestAudio = pickBestAudioUrl(Array.from(pageInterceptedVideoUrls).slice(-5)) || pickBestAudioUrl(Array.from(pageInterceptedVideoUrls));
-                        if (best) {
-                            callback(best, bestAudio);
-                            return;
+                        if (matchedVideos.length > 0) {
+                            const best = pickBestVideoUrl(matchedVideos);
+                            let matchedAudios = Array.from(pageInterceptedVideoUrls).filter(u => u.includes(idMatch[1]));
+                            const bestAudio = pickBestAudioUrl(matchedAudios) || null;
+                            if (best) {
+                                callback(best, bestAudio, null);
+                                return;
+                            }
                         }
                     }
                 }
@@ -787,16 +746,21 @@ function injectDownloadButtons() {
                     if (response && response.urls && response.urls.length > 0) {
                         const platform = PlatformManager.getPlatform();
                         let candidates = response.urls;
-                        const filtered = platform.filterBackgroundUrls(candidates, isVideo);
+                        const filtered = platform.filterBackgroundUrls ? platform.filterBackgroundUrls(candidates, isVideo) : candidates;
                         if (filtered && filtered.length > 0) candidates = filtered;
-                        
-                        const best = pickBestVideoUrl(candidates.slice(-5)) || pickBestVideoUrl(candidates);
-                        const bestAudio = response.audioUrls && response.audioUrls.length > 0 
-                            ? (pickBestAudioUrl(response.audioUrls.slice(-5)) || pickBestAudioUrl(response.audioUrls)) 
-                            : (pickBestAudioUrl(candidates.slice(-5)) || pickBestAudioUrl(candidates) || (pageInterceptedVideoUrls.size > 0 ? (pickBestAudioUrl(Array.from(pageInterceptedVideoUrls).slice(-5)) || pickBestAudioUrl(Array.from(pageInterceptedVideoUrls))) : null));
-                        if (best) {
-                            callback(best, bestAudio);
-                            return;
+
+                        const postUrl = findPostPermalink ? findPostPermalink(media) : null;
+                        const idMatch = (postUrl || window.location.href).match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=|fbid=)(\d+)/);
+                        if (idMatch && idMatch[1]) {
+                            const matched = candidates.filter(u => u.includes(idMatch[1]));
+                            if (matched.length > 0) {
+                                const best = pickBestVideoUrl(matched);
+                                const bestAudio = response.audioUrls ? pickBestAudioUrl(response.audioUrls.filter(u => u.includes(idMatch[1]))) : null;
+                                if (best) {
+                                    callback(best, bestAudio, null);
+                                    return;
+                                }
+                            }
                         }
                     }
                     if (!silent) {
@@ -807,31 +771,6 @@ function injectDownloadButtons() {
 
             if (window.magicOverlayManager) {
                 window.magicOverlayManager.addOverlay(media, createButtonsFn);
-                // After overlay is created, pre-resolve the video URL
-                if (isVideo) {
-                    // Small delay to let the overlay manager create the buttons
-                    setTimeout(() => {
-                        const overlay = window.magicOverlayManager.overlays.get(media);
-                        if (overlay && overlay.container) {
-                            const openBtn = overlay.container.querySelector('.magic-open-btn');
-                            if (openBtn) {
-                                preResolveVideoUrl(openBtn);
-
-                                // Invalidate cached URL when the video source or post changes (e.g. scrolling Facebook feed/reels)
-                                const onMediaChange = () => {
-                                    openBtn.__resolvedVideoUrl = null;
-                                    openBtn.__resolvedAudioUrl = null;
-                                    openBtn.__resolvedMutedUrl = null;
-                                    openBtn.__lastCurrentSrc = null;
-                                    openBtn.__lastPostUrl = null;
-                                    preResolveVideoUrl(openBtn);
-                                };
-                                media.addEventListener('playing', onMediaChange);
-                                media.addEventListener('loadstart', onMediaChange);
-                            }
-                        }
-                    }, 100);
-                }
             }
         }
     });
