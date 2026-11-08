@@ -231,69 +231,92 @@
         return null;
     }
 
-    function extractVideoUrlFromReact(el, isVideoContext = true) {
-        if (!el) return null;
-        let current = el;
+    function extractMediaBundle(el, isVideoContext = true) {
+        if (!el) return { url: null, audioUrl: null, mutedUrl: null };
         const platform = getPlatform();
 
         // Pass 1: Try React Fiber for PROGRESSIVE videos (complete with audio)
+        let progressiveUrl = null;
+        let current = el;
         for (let i = 0; i < 20 && current; i++) {
             const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
                 k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
             if (key && current[key]) {
                 const found = searchObjForVideoUrl(current[key], new Set(), 0, isVideoContext);
-                if (found && !found.toLowerCase().includes('stream_type=dash')) return found;
+                if (found && !found.toLowerCase().includes('stream_type=dash')) {
+                    progressiveUrl = found;
+                    break;
+                }
             }
             current = current.parentElement;
         }
 
         // Pass 2: Check DOM scripts for progressive videos (playable_url_quality_hd, browser_native_hd_url, playable_url)
-        if (platform.extractVideoUrlFromDOM) {
+        if (!progressiveUrl && platform.extractVideoUrlFromDOM) {
             const domUrl = platform.extractVideoUrlFromDOM(el);
-            if (domUrl && !domUrl.toLowerCase().includes('stream_type=dash')) return domUrl;
+            if (domUrl && !domUrl.toLowerCase().includes('stream_type=dash')) {
+                progressiveUrl = domUrl;
+            }
         }
 
-        // Pass 3: Fallback to DOM scripts or React Fiber DASH streams (e.g. 2-hour videos)
-        if (platform.extractVideoUrlFromDOM) {
-            const domUrl = platform.extractVideoUrlFromDOM(el);
-            if (domUrl) return domUrl;
-        }
-
+        // Pass 3: Audio URL extraction
+        let audioUrl = null;
         current = el;
         for (let i = 0; i < 20 && current; i++) {
             const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
                 k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
             if (key && current[key]) {
-                const found = searchObjForVideoUrl(current[key], new Set(), 0, isVideoContext);
-                if (found) return found;
+                const foundAudio = searchObjForAudioUrl(current[key], new Set(), 0);
+                if (foundAudio) {
+                    audioUrl = foundAudio;
+                    break;
+                }
             }
             current = current.parentElement;
         }
+        if (!audioUrl && platform.extractAudioUrlFromDOM) {
+            audioUrl = platform.extractAudioUrlFromDOM(el);
+        }
 
-        return null;
-    }
-
-    function extractAudioUrlFromReact(el) {
-        if (!el) return null;
-        let current = el;
-        const platform = getPlatform();
-
+        // Pass 4: DASH / Muted Video URL extraction
+        let dashVideoUrl = null;
+        current = el;
         for (let i = 0; i < 20 && current; i++) {
             const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
                 k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
             if (key && current[key]) {
-                const found = searchObjForAudioUrl(current[key], new Set(), 0);
-                if (found) return found;
+                if (platform.extractDashVideoFromReact) {
+                    dashVideoUrl = platform.extractDashVideoFromReact(current[key]);
+                    if (dashVideoUrl) break;
+                }
             }
             current = current.parentElement;
         }
-
-        if (platform.extractAudioUrlFromDOM) {
-            const domAudio = platform.extractAudioUrlFromDOM(el);
-            if (domAudio) return domAudio;
+        if (!dashVideoUrl && platform.extractDashVideoFromDOM) {
+            dashVideoUrl = platform.extractDashVideoFromDOM(el);
         }
 
-        return null;
+        // Resolution:
+        // 1. If progressiveUrl exists: it is the master video with audio!
+        // 2. If progressiveUrl does not exist (e.g. 2-hour long video): fall back to dashVideoUrl!
+        const finalUrl = progressiveUrl || dashVideoUrl;
+        const finalMuted = dashVideoUrl || null;
+
+        return {
+            url: finalUrl,
+            audioUrl: audioUrl,
+            mutedUrl: finalMuted
+        };
+    }
+
+    function extractVideoUrlFromReact(el, isVideoContext = true) {
+        const bundle = extractMediaBundle(el, isVideoContext);
+        return bundle.url;
+    }
+
+    function extractAudioUrlFromReact(el) {
+        const bundle = extractMediaBundle(el, true);
+        return bundle.audioUrl;
     }
 
     // Facebook-specific: Parse relay data from <script> tags to find progressive video URLs
@@ -304,19 +327,20 @@
         const isVideo = e.data.isVideo !== undefined ? e.data.isVideo : true;
         const el = document.querySelector(`[data-magic-id="${id}"]`);
 
-        let url = null;
-        let audioUrl = null;
+        let result = { url: null, audioUrl: null, mutedUrl: null };
         if (el) {
-            url = extractVideoUrlFromReact(el, isVideo);
             if (isVideo) {
-                audioUrl = extractAudioUrlFromReact(el);
+                result = extractMediaBundle(el, true);
+            } else {
+                result.url = extractVideoUrlFromReact(el, false);
             }
         }
 
         window.postMessage({
             type: 'magic_response_react_url_' + id,
-            url: url,
-            audioUrl: audioUrl
+            url: result.url,
+            audioUrl: result.audioUrl,
+            mutedUrl: result.mutedUrl
         }, '*');
     });
 

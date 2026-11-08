@@ -466,22 +466,34 @@ function injectDownloadButtons() {
                             platform: platformName 
                         });
                     } else {
-                        if (openBtn.__resolvedVideoUrl) {
+                        const currentPost = findPostPermalink(media);
+                        const currentSrc = media.currentSrc || media.src || '';
+                        const isStale = (openBtn.__lastCurrentSrc && openBtn.__lastCurrentSrc !== currentSrc) ||
+                                        (openBtn.__lastPostUrl && openBtn.__lastPostUrl !== currentPost);
+
+                        if (openBtn.__resolvedVideoUrl && !isStale) {
                             safeSendMessage({ 
                                 action: 'openInNewTab', 
                                 url: openBtn.__resolvedVideoUrl, 
                                 audioUrl: openBtn.__resolvedAudioUrl || null,
+                                mutedUrl: openBtn.__resolvedMutedUrl || null,
                                 isVideo: true, 
                                 platform: platformName 
                             });
                             return;
                         }
-                        getMediaUrl((url, audioUrl) => {
+                        getMediaUrl((url, audioUrl, mutedUrl) => {
                             if (!url) return;
+                            openBtn.__resolvedVideoUrl = url;
+                            openBtn.__resolvedAudioUrl = audioUrl || null;
+                            openBtn.__resolvedMutedUrl = mutedUrl || null;
+                            openBtn.__lastCurrentSrc = currentSrc;
+                            openBtn.__lastPostUrl = currentPost;
                             safeSendMessage({ 
                                 action: 'openInNewTab', 
                                 url: url, 
                                 audioUrl: audioUrl || null,
+                                mutedUrl: mutedUrl || null,
                                 isVideo: true, 
                                 platform: platformName 
                             });
@@ -595,11 +607,14 @@ function injectDownloadButtons() {
             // Pre-resolve video URL to conditionally show/hide the blue button
             const preResolveVideoUrl = (openBtn) => {
                 if (!isVideo) return;
-                getMediaUrl((url, audioUrl) => {
+                getMediaUrl((url, audioUrl, mutedUrl) => {
                     if (url) {
                         // Cache the resolved URL and show the button
                         openBtn.__resolvedVideoUrl = url;
                         openBtn.__resolvedAudioUrl = audioUrl || null;
+                        openBtn.__resolvedMutedUrl = mutedUrl || null;
+                        openBtn.__lastCurrentSrc = media.currentSrc || media.src || '';
+                        openBtn.__lastPostUrl = findPostPermalink(media);
                         openBtn.style.display = 'flex';
                     }
                     // If no URL found, button stays hidden
@@ -608,13 +623,13 @@ function injectDownloadButtons() {
 
             const findPostPermalink = (mediaEl) => {
                 let cur = mediaEl;
-                for (let i = 0; i < 20 && cur; i++) {
-                    const link = cur.querySelector ? cur.querySelector('a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"], a[href*="story_fbid="], a[href*="/posts/"]') : null;
+                for (let i = 0; i < 25 && cur; i++) {
+                    const link = cur.querySelector ? cur.querySelector('a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"], a[href*="story_fbid="], a[href*="/posts/"], a[href*="fbid="], a[href*="/permalink/"]') : null;
                     if (link && link.href) return link.href;
                     cur = cur.parentElement;
                 }
                 const href = window.location.href;
-                if (href.includes('/watch') || href.includes('/reel') || href.includes('/videos/')) {
+                if (href.includes('/watch') || href.includes('/reel') || href.includes('/videos/') || href.includes('story_fbid=')) {
                     return href;
                 }
                 return null;
@@ -631,6 +646,7 @@ function injectDownloadButtons() {
                         window.removeEventListener('message', handler);
                         if (e.data.url) {
                             let resolvedAudio = e.data.audioUrl || null;
+                            const mutedUrl = e.data.mutedUrl || null;
                             if (!resolvedAudio && pageInterceptedVideoUrls.size > 0) {
                                 resolvedAudio = pickBestAudioUrl(Array.from(pageInterceptedVideoUrls).slice(-5)) || pickBestAudioUrl(Array.from(pageInterceptedVideoUrls));
                             }
@@ -639,11 +655,11 @@ function injectDownloadButtons() {
                                     if (response && response.audioUrls && response.audioUrls.length > 0) {
                                         resolvedAudio = pickBestAudioUrl(response.audioUrls.slice(-5)) || pickBestAudioUrl(response.audioUrls);
                                     }
-                                    callback(e.data.url, resolvedAudio);
+                                    callback(e.data.url, resolvedAudio, mutedUrl);
                                 });
                                 return;
                             }
-                            callback(e.data.url, resolvedAudio);
+                            callback(e.data.url, resolvedAudio, mutedUrl);
                         } else {
                             if (window.location.hostname.includes('facebook.com') && isVideo) {
                                 // Fallback for Facebook: ONLY attempt mobile site extraction if we have a specific video permalink
@@ -651,7 +667,7 @@ function injectDownloadButtons() {
                                 if (postUrl) {
                                     safeSendMessage({ action: 'fetchMobileFacebookVideo', url: postUrl }, (response) => {
                                         if (response && response.url) {
-                                            callback(response.url, null);
+                                            callback(response.url, null, null);
                                         } else {
                                             getMediaUrlFallback(callback, silent);
                                         }
@@ -800,6 +816,18 @@ function injectDownloadButtons() {
                             const openBtn = overlay.container.querySelector('.magic-open-btn');
                             if (openBtn) {
                                 preResolveVideoUrl(openBtn);
+
+                                // Invalidate cached URL when the video source or post changes (e.g. scrolling Facebook feed/reels)
+                                const onMediaChange = () => {
+                                    openBtn.__resolvedVideoUrl = null;
+                                    openBtn.__resolvedAudioUrl = null;
+                                    openBtn.__resolvedMutedUrl = null;
+                                    openBtn.__lastCurrentSrc = null;
+                                    openBtn.__lastPostUrl = null;
+                                    preResolveVideoUrl(openBtn);
+                                };
+                                media.addEventListener('playing', onMediaChange);
+                                media.addEventListener('loadstart', onMediaChange);
                             }
                         }
                     }, 100);

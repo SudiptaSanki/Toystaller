@@ -46,17 +46,17 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             const lower = url.toLowerCase();
             if (lower.startsWith('blob:') || lower.startsWith('data:')) return false;
             const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
-            return isCdn && this.isAudio(url);
+            return isCdn && (this.isAudio(url) || lower.includes('.mp3') || lower.includes('.m4a') || lower.includes('.aac'));
         },
 
-        // --- Video URL Validator ---
+        // --- Video URL Validator (Strictly Progressive Master Videos with Audio) ---
         isValidVideo(url) {
             if (!url || typeof url !== 'string') return false;
             const lower = url.toLowerCase();
             if (lower.startsWith('blob:') || lower.startsWith('data:')) return false;
             if (lower.includes('facebook.com') || lower.includes('messenger.com') || lower.includes('instagram.com')) return false;
             if (lower.includes('unified_cvc')) return false;
-            if (lower.includes('.m3u8') || lower.includes('.mpd')) return false;
+            if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('stream_type=dash')) return false;
             
             // Strictly reject audio-only tracks (e.g. /v/t42. or mime=audio)
             if (this.isAudio(url)) return false;
@@ -68,9 +68,21 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
 
             const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
             const isVideoExt = lower.includes('.mp4') || lower.includes('.m4v') || lower.includes('.webm');
-            const isVideoPath = lower.includes('/v/t64.') || lower.includes('/v/t66.') || lower.includes('/video/') || lower.includes('mime=video') || lower.includes('stream_type=dash') || lower.includes('/o1/v/') || (lower.includes('fbcdn.net') && (lower.includes('/v/') || lower.includes('video.')));
+            const isVideoPath = lower.includes('/v/t64.') || lower.includes('/v/t66.') || lower.includes('/video/') || lower.includes('mime=video') || lower.includes('/o1/v/');
 
             return isCdn && (isVideoExt || isVideoPath);
+        },
+
+        // --- DASH Video Validator (Video-only fallback for long videos/live VODs) ---
+        isValidDashVideo(url) {
+            if (!url || typeof url !== 'string') return false;
+            const lower = url.toLowerCase();
+            if (lower.startsWith('blob:') || lower.startsWith('data:')) return false;
+            if (lower.includes('facebook.com') || lower.includes('messenger.com') || lower.includes('instagram.com')) return false;
+            if (this.isAudio(url)) return false;
+            if (lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('videocover')) return false;
+            const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
+            return isCdn && (lower.includes('stream_type=dash') || lower.includes('/o1/v/') || lower.includes('/v/t64.') || lower.includes('/v/t66.'));
         },
 
         cleanVideoUrl(url) {
@@ -623,40 +635,6 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                     }
                 }
 
-                // 4. Fallback to DASH Representations & Streams (when no progressive video exists)
-                const dashCandidates = [
-                    val.playback_url,
-                    val.streamingUrl,
-                    val.stream_url,
-                    val.unmuted_src
-                ];
-                for (const c of dashCandidates) {
-                    if (typeof c === 'string') {
-                        const clean = this.cleanVideoUrl(c);
-                        if (clean && this.isValidVideo(clean)) return clean;
-                    }
-                }
-
-                if (Array.isArray(val.representations) && val.representations.length > 0) {
-                    const videoReps = val.representations.filter(rep => {
-                        const u = rep && (rep.base_url || rep.url || rep.playback_url);
-                        if (typeof u !== 'string') return false;
-                        const mime = (rep.mime_type || '').toLowerCase();
-                        if (mime.includes('audio')) return false;
-                        const clean = this.cleanVideoUrl(u);
-                        return clean && this.isValidVideo(clean);
-                    });
-                    if (videoReps.length > 0) {
-                        videoReps.sort((a, b) => {
-                            const resA = (a.width || 0) * (a.height || 0);
-                            const resB = (b.width || 0) * (b.height || 0);
-                            if (resB !== resA) return resB - resA;
-                            return (b.bandwidth || 0) - (a.bandwidth || 0);
-                        });
-                        const bestRep = videoReps[0];
-                        return this.cleanVideoUrl(bestRep.base_url || bestRep.url || bestRep.playback_url);
-                    }
-                }
             } else {
                 // High-resolution photo candidates on Facebook
                 if (val.viewer_image && typeof val.viewer_image.uri === 'string' && !val.viewer_image.uri.startsWith('blob:') && !this.isInternalUrl(val.viewer_image.uri)) {
@@ -703,6 +681,43 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             return null;
         },
 
+        extractDashVideoFromReact(val) {
+            if (!val || typeof val !== 'object') return null;
+            const dashCandidates = [
+                val.playback_url,
+                val.streamingUrl,
+                val.stream_url,
+                val.unmuted_src
+            ];
+            for (const c of dashCandidates) {
+                if (typeof c === 'string') {
+                    const clean = this.cleanVideoUrl(c);
+                    if (clean && this.isValidDashVideo(clean)) return clean;
+                }
+            }
+            if (Array.isArray(val.representations) && val.representations.length > 0) {
+                const videoReps = val.representations.filter(rep => {
+                    const u = rep && (rep.base_url || rep.url || rep.playback_url);
+                    if (typeof u !== 'string') return false;
+                    const mime = (rep.mime_type || '').toLowerCase();
+                    if (mime.includes('audio')) return false;
+                    const clean = this.cleanVideoUrl(u);
+                    return clean && this.isValidDashVideo(clean);
+                });
+                if (videoReps.length > 0) {
+                    videoReps.sort((a, b) => {
+                        const resA = (a.width || 0) * (a.height || 0);
+                        const resB = (b.width || 0) * (b.height || 0);
+                        if (resB !== resA) return resB - resA;
+                        return (b.bandwidth || 0) - (a.bandwidth || 0);
+                    });
+                    const bestRep = videoReps[0];
+                    return this.cleanVideoUrl(bestRep.base_url || bestRep.url || bestRep.playback_url);
+                }
+            }
+            return null;
+        },
+
         extractPriorityAudioUrl(val) {
             if (!val || typeof val !== 'object') return null;
             const audioCandidates = [
@@ -714,7 +729,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             for (const c of audioCandidates) {
                 if (typeof c === 'string') {
                     const clean = this.cleanVideoUrl(c);
-                    if (clean && this.isValidAudio(clean)) return clean;
+                    if (clean && (this.isValidAudio(clean) || this.isAudio(clean))) return clean;
                 }
             }
             if (Array.isArray(val.audio_streams) && val.audio_streams.length > 0) {
@@ -722,7 +737,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                     const u = s && (s.url || s.src);
                     if (typeof u === 'string') {
                         const clean = this.cleanVideoUrl(u);
-                        if (clean && this.isValidAudio(clean)) return clean;
+                        if (clean && (this.isValidAudio(clean) || this.isAudio(clean))) return clean;
                     }
                 }
             }
@@ -732,7 +747,8 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                     if (typeof u !== 'string') return false;
                     const mime = (rep.mime_type || '').toLowerCase();
                     const clean = this.cleanVideoUrl(u);
-                    return (mime.includes('audio') || this.isAudio(clean)) && clean && this.isValidAudio(clean);
+                    const isCdn = clean && (clean.includes('fbcdn.net') || clean.includes('fbsbx.com'));
+                    return isCdn && (mime.includes('audio') || this.isAudio(clean));
                 });
                 if (audioReps.length > 0) {
                     audioReps.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
@@ -831,60 +847,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                     }
                 }
 
-                // 6. Check playback_url
-                const playbackMatch = text.match(/"playback_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
-                if (playbackMatch && playbackMatch[1]) {
-                    try {
-                        const raw = JSON.parse('"' + playbackMatch[1] + '"');
-                        const clean = this.cleanVideoUrl(raw);
-                        if (this.isValidVideo(clean)) return clean;
-                    } catch(e) {
-                        const clean = this.cleanVideoUrl(playbackMatch[1]);
-                        if (this.isValidVideo(clean)) return clean;
-                    }
-                }
-
-                // 7. Check stream_url
-                const streamMatch = text.match(/"stream_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
-                if (streamMatch && streamMatch[1]) {
-                    try {
-                        const raw = JSON.parse('"' + streamMatch[1] + '"');
-                        const clean = this.cleanVideoUrl(raw);
-                        if (this.isValidVideo(clean)) return clean;
-                    } catch(e) {
-                        const clean = this.cleanVideoUrl(streamMatch[1]);
-                        if (this.isValidVideo(clean)) return clean;
-                    }
-                }
-
-                // 8. Check unmuted_src
-                const unmutedMatch = text.match(/"unmuted_src"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
-                if (unmutedMatch && unmutedMatch[1]) {
-                    try {
-                        const raw = JSON.parse('"' + unmutedMatch[1] + '"');
-                        const clean = this.cleanVideoUrl(raw);
-                        if (this.isValidVideo(clean)) return clean;
-                    } catch(e) {
-                        const clean = this.cleanVideoUrl(unmutedMatch[1]);
-                        if (this.isValidVideo(clean)) return clean;
-                    }
-                }
-
-                // 9. Check base_url (DASH representations)
-                const baseUrlRegex = /"base_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
-                let baseM;
-                while ((baseM = baseUrlRegex.exec(text)) !== null) {
-                    try {
-                        const raw = JSON.parse('"' + baseM[1] + '"');
-                        const clean = this.cleanVideoUrl(raw);
-                        if (this.isValidVideo(clean)) return clean;
-                    } catch(e) {
-                        const clean = this.cleanVideoUrl(baseM[1]);
-                        if (this.isValidVideo(clean)) return clean;
-                    }
-                }
-
-                // 10. Direct regex search for CDN MP4 fallback
+                // 6. Direct regex search for CDN Progressive MP4
                 const cdnRegex = /"(https:(?:\\\/\\\/|\/\/)[^"]+?(?:fbcdn\.net|fbsbx\.com)[^"]+?\.(?:mp4|m4v)[^"]*)"/g;
                 let cdnM;
                 while ((cdnM = cdnRegex.exec(text)) !== null) {
@@ -935,30 +898,81 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 }
             }
 
-            // Pass 2: On dedicated video pages (/reel/, /watch/, /videos/, modal theater):
-            // Scan scripts for high-confidence playable video URLs
-            const isDedicatedPage = window.location.pathname.includes('/reel') ||
-                                    window.location.pathname.includes('/watch') ||
-                                    window.location.pathname.includes('/videos/') ||
-                                    (this.hasActiveModal && this.hasActiveModal());
-            if (isDedicatedPage) {
-                for (const s of scripts) {
-                    const text = s.textContent;
-                    if (text && (
-                        text.includes('playable_url_quality_hd') ||
-                        text.includes('browser_native_hd_url') ||
-                        text.includes('progressive_download_url') ||
-                        text.includes('playable_url') ||
-                        text.includes('playback_url') ||
-                        text.includes('representations') ||
-                        text.includes('base_url')
-                    )) {
-                        const found = parseScriptText(text);
-                        if (found) return found;
-                    }
+            // Pass 2: High-confidence progressive playable keys across all scripts
+            for (const s of scripts) {
+                const text = s.textContent;
+                if (text && (
+                    text.includes('playable_url_quality_hd') ||
+                    text.includes('browser_native_hd_url') ||
+                    text.includes('progressive_download_url') ||
+                    text.includes('playable_url')
+                )) {
+                    const found = parseScriptText(text);
+                    if (found) return found;
                 }
             }
 
+            return null;
+        },
+
+        // --- DOM Fallback for DASH Video-Only Streams (e.g. 2-Hour Videos/Reels) ---
+        extractDashVideoFromDOM(el) {
+            if (!el) return null;
+
+            const parseDashScriptText = (text) => {
+                if (!text) return null;
+
+                // 1. Check playback_url
+                const playbackMatch = text.match(/"playback_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                if (playbackMatch && playbackMatch[1]) {
+                    try {
+                        const raw = JSON.parse('"' + playbackMatch[1] + '"');
+                        const clean = this.cleanVideoUrl(raw);
+                        if (clean && this.isValidDashVideo(clean)) return clean;
+                    } catch(e) {
+                        const clean = this.cleanVideoUrl(playbackMatch[1]);
+                        if (clean && this.isValidDashVideo(clean)) return clean;
+                    }
+                }
+
+                // 2. Check stream_url / unmuted_src
+                const streamMatch = text.match(/"(?:stream_url|unmuted_src)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                if (streamMatch && streamMatch[1]) {
+                    try {
+                        const raw = JSON.parse('"' + streamMatch[1] + '"');
+                        const clean = this.cleanVideoUrl(raw);
+                        if (clean && this.isValidDashVideo(clean)) return clean;
+                    } catch(e) {
+                        const clean = this.cleanVideoUrl(streamMatch[1]);
+                        if (clean && this.isValidDashVideo(clean)) return clean;
+                    }
+                }
+
+                // 3. Check base_url in representations
+                const baseUrlRegex = /"base_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
+                let baseM;
+                while ((baseM = baseUrlRegex.exec(text)) !== null) {
+                    try {
+                        const raw = JSON.parse('"' + baseM[1] + '"');
+                        const clean = this.cleanVideoUrl(raw);
+                        if (clean && this.isValidDashVideo(clean)) return clean;
+                    } catch(e) {
+                        const clean = this.cleanVideoUrl(baseM[1]);
+                        if (clean && this.isValidDashVideo(clean)) return clean;
+                    }
+                }
+
+                return null;
+            };
+
+            const scripts = document.querySelectorAll('script[type="application/json"], script:not([src])');
+            for (const s of scripts) {
+                const text = s.textContent;
+                if (text && (text.includes('playback_url') || text.includes('representations') || text.includes('base_url') || text.includes('stream_url'))) {
+                    const found = parseDashScriptText(text);
+                    if (found) return found;
+                }
+            }
             return null;
         },
 
@@ -980,10 +994,10 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                     try {
                         const raw = JSON.parse('"' + repM[1] + '"');
                         const clean = this.cleanVideoUrl(raw);
-                        if (clean && this.isValidAudio(clean)) return clean;
+                        if (clean && (clean.includes('fbcdn.net') || clean.includes('fbsbx.com'))) return clean;
                     } catch(e) {
                         const clean = this.cleanVideoUrl(repM[1]);
-                        if (clean && this.isValidAudio(clean)) return clean;
+                        if (clean && (clean.includes('fbcdn.net') || clean.includes('fbsbx.com'))) return clean;
                     }
                 }
 
@@ -993,10 +1007,10 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                     try {
                         const raw = JSON.parse('"' + audioUrlMatch[1] + '"');
                         const clean = this.cleanVideoUrl(raw);
-                        if (clean && this.isValidAudio(clean)) return clean;
+                        if (clean && (clean.includes('fbcdn.net') || clean.includes('fbsbx.com'))) return clean;
                     } catch(e) {
                         const clean = this.cleanVideoUrl(audioUrlMatch[1]);
-                        if (clean && this.isValidAudio(clean)) return clean;
+                        if (clean && (clean.includes('fbcdn.net') || clean.includes('fbsbx.com'))) return clean;
                     }
                 }
 
@@ -1007,10 +1021,10 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                     try {
                         const raw = JSON.parse('"' + cdnM[1] + '"');
                         const clean = this.cleanVideoUrl(raw);
-                        if (clean && this.isValidAudio(clean)) return clean;
+                        if (clean && (clean.includes('fbcdn.net') || clean.includes('fbsbx.com'))) return clean;
                     } catch(e) {
                         const clean = this.cleanVideoUrl(cdnM[1]);
-                        if (clean && this.isValidAudio(clean)) return clean;
+                        if (clean && (clean.includes('fbcdn.net') || clean.includes('fbsbx.com'))) return clean;
                     }
                 }
 

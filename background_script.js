@@ -206,6 +206,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.audioUrl) {
             playerUrl += '&audioUrl=' + encodeURIComponent(request.audioUrl);
         }
+        if (request.mutedUrl) {
+            playerUrl += '&mutedUrl=' + encodeURIComponent(request.mutedUrl);
+        }
         
         const targetUrl = shouldUsePlayer ? playerUrl : url;
 

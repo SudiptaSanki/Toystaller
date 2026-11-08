@@ -15,8 +15,10 @@
     const audioPlayer = document.getElementById('audioPlayer');
     const imageViewer = document.getElementById('imageViewer');
     const dlBtn = document.getElementById('dlBtn');
+    const dlMutedBtn = document.getElementById('dlMutedBtn');
     const dlAudioBtn = document.getElementById('dlAudioBtn');
     const copyBtn = document.getElementById('copyBtn');
+    const copyMutedBtn = document.getElementById('copyMutedBtn');
     const copyAudioBtn = document.getElementById('copyAudioBtn');
     const resText = document.getElementById('resolutionText');
     const formatText = document.getElementById('formatText');
@@ -25,6 +27,7 @@
 
     let activeDownloadUrl = rawUrl ? rawUrl.split('#')[0] : null;
     let activeAudioUrl = params.get('audioUrl') ? params.get('audioUrl').split('#')[0] : null;
+    let activeMutedUrl = params.get('mutedUrl') ? params.get('mutedUrl').split('#')[0] : null;
     let activeFilename = `Toystaller_Media_${Date.now()}`;
     let activeAudioFilename = `Toystaller_Audio_${Date.now()}.mp3`;
     let isVideoMode = true;
@@ -173,50 +176,57 @@
         if (dlAudioBtn) dlAudioBtn.style.display = 'inline-flex';
         if (copyAudioBtn) copyAudioBtn.style.display = 'inline-flex';
 
+        const isSeparateVideoStream = activeDownloadUrl && (
+            activeDownloadUrl.includes('stream_type=dash') ||
+            activeDownloadUrl.includes('/o1/v/')
+        );
+
         if (audioPlayer) {
             audioPlayer.src = activeAudioUrl;
             audioPlayer.preload = 'auto';
 
-            const syncAndPlay = () => {
-                audioPlayer.currentTime = videoPlayer.currentTime;
-                audioPlayer.volume = videoPlayer.volume;
-                audioPlayer.muted = videoPlayer.muted;
-                if (!videoPlayer.paused) {
-                    audioPlayer.play().catch(e => {
-                        console.warn("Audio play prevented:", e);
-                    });
-                }
-            };
-
-            videoPlayer.addEventListener('play', syncAndPlay);
-            videoPlayer.addEventListener('playing', syncAndPlay);
-            videoPlayer.addEventListener('pause', () => audioPlayer.pause());
-            videoPlayer.addEventListener('seeking', () => {
-                audioPlayer.currentTime = videoPlayer.currentTime;
-            });
-            videoPlayer.addEventListener('seeked', () => {
-                audioPlayer.currentTime = videoPlayer.currentTime;
-                if (!videoPlayer.paused) audioPlayer.play().catch(() => {});
-            });
-            videoPlayer.addEventListener('volumechange', () => {
-                audioPlayer.volume = videoPlayer.volume;
-                audioPlayer.muted = videoPlayer.muted;
-            });
-            videoPlayer.addEventListener('timeupdate', () => {
-                if (Math.abs(audioPlayer.currentTime - videoPlayer.currentTime) > 0.25) {
+            if (isSeparateVideoStream) {
+                const syncAndPlay = () => {
                     audioPlayer.currentTime = videoPlayer.currentTime;
+                    audioPlayer.volume = videoPlayer.volume;
+                    audioPlayer.muted = videoPlayer.muted;
+                    if (!videoPlayer.paused) {
+                        audioPlayer.play().catch(e => {
+                            console.warn("Audio play prevented:", e);
+                        });
+                    }
+                };
+
+                videoPlayer.addEventListener('play', syncAndPlay);
+                videoPlayer.addEventListener('playing', syncAndPlay);
+                videoPlayer.addEventListener('pause', () => audioPlayer.pause());
+                videoPlayer.addEventListener('seeking', () => {
+                    audioPlayer.currentTime = videoPlayer.currentTime;
+                });
+                videoPlayer.addEventListener('seeked', () => {
+                    audioPlayer.currentTime = videoPlayer.currentTime;
+                    if (!videoPlayer.paused) audioPlayer.play().catch(() => {});
+                });
+                videoPlayer.addEventListener('volumechange', () => {
+                    audioPlayer.volume = videoPlayer.volume;
+                    audioPlayer.muted = videoPlayer.muted;
+                });
+                videoPlayer.addEventListener('timeupdate', () => {
+                    if (Math.abs(audioPlayer.currentTime - videoPlayer.currentTime) > 0.25) {
+                        audioPlayer.currentTime = videoPlayer.currentTime;
+                    }
+                });
+
+                // Unlock audio on first user click or keypress in player tab
+                const unlockAudio = () => {
+                    if (!videoPlayer.paused) syncAndPlay();
+                };
+                window.addEventListener('click', unlockAudio, { once: true });
+                window.addEventListener('keydown', unlockAudio, { once: true });
+
+                if (!videoPlayer.paused) {
+                    syncAndPlay();
                 }
-            });
-
-            // Unlock audio on first user click or keypress in player tab
-            const unlockAudio = () => {
-                if (!videoPlayer.paused) syncAndPlay();
-            };
-            window.addEventListener('click', unlockAudio, { once: true });
-            window.addEventListener('keydown', unlockAudio, { once: true });
-
-            if (!videoPlayer.paused) {
-                syncAndPlay();
             }
         }
     }
@@ -266,13 +276,36 @@
             videoPlayer.style.display = 'block';
             imageViewer.style.display = 'none';
             if (shortcutsText) shortcutsText.style.display = 'inline-flex';
-            if (formatText) formatText.textContent = activeAudioUrl ? 'Direct Master Audio + Video' : 'Direct Master Media';
+            
+            const isDash = sourceUrl && sourceUrl.includes('stream_type=dash');
+            if (formatText) {
+                if (isDash && activeAudioUrl) {
+                    formatText.textContent = 'Direct DASH Stream (Synced Audio + Video)';
+                } else if (activeAudioUrl) {
+                    formatText.textContent = 'Direct Master Audio + Video';
+                } else {
+                    formatText.textContent = 'Direct Master Media';
+                }
+            }
 
-            if (dlAudioBtn) dlAudioBtn.style.display = 'inline-flex';
-            if (copyAudioBtn) copyAudioBtn.style.display = 'inline-flex';
+            if (activeAudioUrl) {
+                if (dlAudioBtn) dlAudioBtn.style.display = 'inline-flex';
+                if (copyAudioBtn) copyAudioBtn.style.display = 'inline-flex';
+            }
+
+            const effectiveMuted = activeMutedUrl || (isDash ? sourceUrl : null);
+            if (effectiveMuted) {
+                if (dlMutedBtn) dlMutedBtn.style.display = 'inline-flex';
+                if (copyMutedBtn) copyMutedBtn.style.display = 'inline-flex';
+            } else {
+                if (dlMutedBtn) dlMutedBtn.style.display = 'none';
+                if (copyMutedBtn) copyMutedBtn.style.display = 'none';
+            }
 
             dlBtn.innerHTML = `
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                Download Video
+            `;
                 Download Video
             `;
 
@@ -354,6 +387,8 @@
 
             if (dlAudioBtn) dlAudioBtn.style.display = 'none';
             if (copyAudioBtn) copyAudioBtn.style.display = 'none';
+            if (dlMutedBtn) dlMutedBtn.style.display = 'none';
+            if (copyMutedBtn) copyMutedBtn.style.display = 'none';
 
             dlBtn.innerHTML = `
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
@@ -457,6 +492,55 @@
             }, 1800);
         });
     });
+
+    // Copy Muted Video Link handler
+    if (copyMutedBtn) {
+        copyMutedBtn.addEventListener('click', () => {
+            const targetMuted = activeMutedUrl || (activeDownloadUrl && activeDownloadUrl.includes('stream_type=dash') ? activeDownloadUrl : null);
+            if (!targetMuted) return;
+            navigator.clipboard.writeText(targetMuted).then(() => {
+                copyMutedBtn.textContent = 'Muted Copied!';
+                setTimeout(() => {
+                    copyMutedBtn.innerHTML = `
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                        Copy Muted
+                    `;
+                }, 1800);
+            });
+        });
+    }
+
+    // Download Muted Video handler
+    if (dlMutedBtn) {
+        dlMutedBtn.addEventListener('click', () => {
+            const targetMuted = activeMutedUrl || (activeDownloadUrl && activeDownloadUrl.includes('stream_type=dash') ? activeDownloadUrl : null);
+            if (!targetMuted) return;
+            const ext = 'mp4';
+            const base = (platformParam || 'Toystaller').replace(/[^a-zA-Z0-9]/g, '_');
+            const dlFilename = `${base}_Muted_${Date.now()}.${ext}`;
+
+            chrome.runtime.sendMessage({
+                action: 'downloadMedia',
+                url: targetMuted,
+                filename: dlFilename
+            }, (response) => {
+                if (response && response.success) {
+                    dlMutedBtn.innerHTML = `
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                        Muted Downloading
+                    `;
+                    setTimeout(() => {
+                        dlMutedBtn.innerHTML = `
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>
+                            Download Muted
+                        `;
+                    }, 2500);
+                }
+            });
+        });
+    }
 
     // Copy Audio handler
     if (copyAudioBtn) {
