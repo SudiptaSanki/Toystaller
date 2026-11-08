@@ -155,6 +155,109 @@
         }, 15000);
     }
 
+    // --- Chunked Range Downloader for Large / Long Media (Bypasses 500MB rate limits) ---
+    async function downloadMediaWithProgress(url, filename, onProgress) {
+        let totalSize = 0;
+        let supportsRange = false;
+        try {
+            const probeRes = await fetch(url, {
+                headers: { 'Range': 'bytes=0-0' }
+            });
+            if (probeRes.status === 206) {
+                supportsRange = true;
+                const cr = probeRes.headers.get('Content-Range');
+                if (cr) {
+                    const m = cr.match(/\/(\d+)/);
+                    if (m) totalSize = parseInt(m[1], 10);
+                }
+            }
+        } catch (e) {
+            console.warn("Probe range check failed:", e);
+        }
+
+        // If file is small (< 80MB) or server doesn't support Range, use background download dispatcher
+        if (!supportsRange || totalSize < 80 * 1024 * 1024) {
+            return new Promise((resolve, reject) => {
+                chrome.runtime.sendMessage({
+                    action: 'downloadMedia',
+                    url: url,
+                    filename: filename
+                }, (response) => {
+                    if (response && response.success) resolve();
+                    else reject(new Error((response && response.error) || 'Download failed'));
+                });
+            });
+        }
+
+        // For large media (> 80MB, e.g. 754MB 1.23h Facebook video):
+        // Download via 50MB Range chunks to prevent network drops and CDN aborts
+        const CHUNK_SIZE = 50 * 1024 * 1024;
+        const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
+
+        let fileWritable = null;
+        if (window.showSaveFilePicker) {
+            try {
+                const ext = filename.split('.').pop() || 'mp4';
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: filename,
+                    types: [{
+                        description: 'Media File',
+                        accept: { [`video/${ext}`]: [`.${ext}`] }
+                    }]
+                });
+                fileWritable = await handle.createWritable();
+            } catch (err) {
+                console.log("Picker cancelled or unsupported, fallback to memory buffer:", err);
+            }
+        }
+
+        const buffers = fileWritable ? null : [];
+        let downloadedBytes = 0;
+
+        for (let i = 0; i < totalChunks; i++) {
+            const start = i * CHUNK_SIZE;
+            const end = Math.min((i + 1) * CHUNK_SIZE - 1, totalSize - 1);
+
+            if (onProgress) onProgress(downloadedBytes, totalSize);
+
+            const chunkRes = await fetch(url, {
+                headers: { 'Range': `bytes=${start}-${end}` }
+            });
+
+            if (!chunkRes.ok && chunkRes.status !== 206) {
+                throw new Error(`Chunk download failed with status ${chunkRes.status}`);
+            }
+
+            const chunkBuf = await chunkRes.arrayBuffer();
+            if (fileWritable) {
+                await fileWritable.write(chunkBuf);
+            } else {
+                buffers.push(chunkBuf);
+            }
+
+            downloadedBytes += chunkBuf.byteLength;
+            if (onProgress) onProgress(downloadedBytes, totalSize);
+        }
+
+        if (fileWritable) {
+            await fileWritable.close();
+            return;
+        }
+
+        const mime = filename.endsWith('.mp3') ? 'audio/mp3' : 'video/mp4';
+        const blob = new Blob(buffers, { type: mime });
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            a.remove();
+            URL.revokeObjectURL(blobUrl);
+        }, 30000);
+    }
+
     function restoreDlBtn() {
         dlBtn.disabled = false;
         dlBtn.innerHTML = `
@@ -343,11 +446,13 @@
                     videoPlayer.play().catch(() => {});
                 });
 
-                window.addEventListener('click', () => {
+                const unmuteHandler = () => {
                     if (videoPlayer && videoPlayer.muted && isVideoMode) {
                         videoPlayer.muted = false;
                     }
-                }, { once: true });
+                };
+                window.addEventListener('click', unmuteHandler, { once: true });
+                window.addEventListener('keydown', unmuteHandler, { once: true });
 
                 videoPlayer.addEventListener('loadedmetadata', () => {
                     if (videoPlayer.videoWidth && videoPlayer.videoHeight) {
@@ -417,8 +522,9 @@
     dlBtn.addEventListener('click', () => {
         if (!activeDownloadUrl) return;
 
+        dlBtn.disabled = true;
+
         if (isHls) {
-            dlBtn.disabled = true;
             dlBtn.textContent = 'Preparing download...';
 
             downloadHlsVideo(activeDownloadUrl, activeFilename, (curr, total) => {
@@ -439,29 +545,33 @@
                 });
             });
         } else {
-            chrome.runtime.sendMessage({
-                action: 'downloadMedia',
-                url: activeDownloadUrl,
-                filename: activeFilename
-            }, (response) => {
-                if (response && response.success) {
-                    dlBtn.innerHTML = `
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="20 6 9 17 4 12"></polyline>
-                        </svg>
-                        Download Started
-                    `;
-                    setTimeout(restoreDlBtn, 2500);
+            dlBtn.textContent = 'Starting download...';
+            downloadMediaWithProgress(activeDownloadUrl, activeFilename, (curr, total) => {
+                const pct = total > 0 ? Math.round((curr / total) * 100) : 0;
+                dlBtn.textContent = `Downloading ${pct}%...`;
+            }).then(() => {
+                dlBtn.innerHTML = `
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                    Download Complete!
+                `;
+                setTimeout(restoreDlBtn, 2500);
 
-                    // If this is a separate DASH video-only stream, also automatically download the accompanying audio track
-                    if (activeAudioUrl && (activeDownloadUrl.includes('stream_type=dash') || activeDownloadUrl.includes('/o1/v/'))) {
-                        chrome.runtime.sendMessage({
-                            action: 'downloadMedia',
-                            url: activeAudioUrl,
-                            filename: activeAudioFilename
-                        });
-                    }
+                // If this is a separate DASH video-only stream, also download accompanying audio
+                if (activeAudioUrl && (activeDownloadUrl.includes('stream_type=dash') || activeDownloadUrl.includes('/o1/v/'))) {
+                    downloadMediaWithProgress(activeAudioUrl, activeAudioFilename, () => {});
                 }
+            }).catch((err) => {
+                console.warn("Direct download fallback:", err);
+                chrome.runtime.sendMessage({
+                    action: 'downloadMedia',
+                    url: activeDownloadUrl,
+                    filename: activeFilename
+                }, () => {
+                    dlBtn.textContent = 'Download Started';
+                    setTimeout(restoreDlBtn, 2500);
+                });
             });
         }
     });
@@ -509,25 +619,37 @@
             const base = (platformParam || 'Toystaller').replace(/[^a-zA-Z0-9]/g, '_');
             const dlFilename = `${base}_Muted_${Date.now()}.${ext}`;
 
-            chrome.runtime.sendMessage({
-                action: 'downloadMedia',
-                url: targetMuted,
-                filename: dlFilename
-            }, (response) => {
-                if (response && response.success) {
+            dlMutedBtn.textContent = 'Downloading Muted...';
+            downloadMediaWithProgress(targetMuted, dlFilename, (curr, total) => {
+                const pct = total > 0 ? Math.round((curr / total) * 100) : 0;
+                dlMutedBtn.textContent = `Muted ${pct}%...`;
+            }).then(() => {
+                dlMutedBtn.innerHTML = `
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                    Muted Complete!
+                `;
+                setTimeout(() => {
                     dlMutedBtn.innerHTML = `
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="20 6 9 17 4 12"></polyline>
-                        </svg>
-                        Muted Downloading
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>
+                        Download Muted
                     `;
+                }, 2500);
+            }).catch(() => {
+                chrome.runtime.sendMessage({
+                    action: 'downloadMedia',
+                    url: targetMuted,
+                    filename: dlFilename
+                }, () => {
+                    dlMutedBtn.textContent = 'Muted Started';
                     setTimeout(() => {
                         dlMutedBtn.innerHTML = `
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>
                             Download Muted
                         `;
                     }, 2500);
-                }
+                });
             });
         });
     }
@@ -554,29 +676,41 @@
         dlAudioBtn.addEventListener('click', () => {
             const targetAudio = activeAudioUrl || activeDownloadUrl;
             if (!targetAudio) return;
-            const ext = 'mp3';
+            const ext = activeAudioUrl ? 'mp3' : 'mp4';
             const base = (platformParam || 'Toystaller').replace(/[^a-zA-Z0-9]/g, '_');
             const dlFilename = activeAudioFilename || `${base}_Audio_${Date.now()}.${ext}`;
 
-            chrome.runtime.sendMessage({
-                action: 'downloadMedia',
-                url: targetAudio,
-                filename: dlFilename
-            }, (response) => {
-                if (response && response.success) {
+            dlAudioBtn.textContent = 'Downloading Audio...';
+            downloadMediaWithProgress(targetAudio, dlFilename, (curr, total) => {
+                const pct = total > 0 ? Math.round((curr / total) * 100) : 0;
+                dlAudioBtn.textContent = `Audio ${pct}%...`;
+            }).then(() => {
+                dlAudioBtn.innerHTML = `
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                    Audio Complete!
+                `;
+                setTimeout(() => {
                     dlAudioBtn.innerHTML = `
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="20 6 9 17 4 12"></polyline>
-                        </svg>
-                        Audio Downloading
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                        Download Audio
                     `;
+                }, 2500);
+            }).catch(() => {
+                chrome.runtime.sendMessage({
+                    action: 'downloadMedia',
+                    url: targetAudio,
+                    filename: dlFilename
+                }, () => {
+                    dlAudioBtn.textContent = 'Audio Started';
                     setTimeout(() => {
                         dlAudioBtn.innerHTML = `
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
                             Download Audio
                         `;
                     }, 2500);
-                }
+                });
             });
         });
     }

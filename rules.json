@@ -9,13 +9,17 @@
           "header": "Referer",
           "operation": "set",
           "value": "https://www.instagram.com/"
+        },
+        {
+          "header": "Origin",
+          "operation": "set",
+          "value": "https://www.instagram.com"
         }
       ]
     },
     "condition": {
       "urlFilter": "||cdninstagram.com",
-      "excludedInitiatorDomains": ["instagram.com"],
-      "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
+      "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest", "other"]
     }
   },
   {
@@ -38,8 +42,7 @@
     },
     "condition": {
       "urlFilter": "||fbcdn.net",
-      "excludedInitiatorDomains": ["facebook.com", "messenger.com", "instagram.com"],
-      "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
+      "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest", "other"]
     }
   },
   {
@@ -62,8 +65,7 @@
     },
     "condition": {
       "urlFilter": "||fbsbx.com",
-      "excludedInitiatorDomains": ["facebook.com", "messenger.com", "instagram.com"],
-      "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
+      "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest", "other"]
     }
   },
   {
@@ -115,8 +117,7 @@
     },
     "condition": {
       "urlFilter": "||whatsapp.net",
-      "excludedInitiatorDomains": ["whatsapp.com", "web.whatsapp.com"],
-      "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
+      "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest", "other"]
     }
   },
   {
@@ -139,8 +140,7 @@
     },
     "condition": {
       "urlFilter": "||whatsapp.com",
-      "excludedInitiatorDomains": ["whatsapp.com", "web.whatsapp.com"],
-      "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
+      "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest", "other"]
     }
   }
 ]

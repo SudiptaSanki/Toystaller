@@ -113,7 +113,7 @@
                 if (isVideo && (lower.includes('videocover') || lower.includes('/image/') || lower.includes('.jpg') || lower.includes('.png') || lower.includes('.webp'))) {
                     return false;
                 }
-                if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('stream_type=dash') || lower.includes('bytestart') || lower.includes('/audio') || lower.includes('manifest')) {
+                if (lower.includes('.mpd') || lower.includes('stream_type=dash') || lower.includes('bytestart') || lower.includes('/audio')) {
                     return false;
                 }
                 return (lower.includes('licdn.com') && (lower.includes('playlist/vid') || lower.includes('video') || lower.includes('playback') || lower.includes('progressive'))) || lower.includes('.mp4');
@@ -156,8 +156,8 @@
                 return false;
             }
 
-            // Reject DASH manifests, HLS playlists, segments, and audio tracks that cause 0:00 video playback
-            if (lowerVal.includes('.mpd') || lowerVal.includes('.m3u8') || lowerVal.includes('stream_type=dash') || lowerVal.includes('/manifest') || lowerVal.includes('bytestart') || lowerVal.includes('/audio') || lowerKey.includes('audio')) {
+            // Reject DASH manifests, audio tracks that cause 0:00 video playback
+            if (lowerVal.includes('.mpd') || lowerVal.includes('stream_type=dash') || lowerVal.includes('bytestart') || lowerVal.includes('/audio') || lowerKey.includes('audio')) {
                 return false;
             }
 
@@ -219,8 +219,7 @@
         isValidVideo(url) {
             if (!url || typeof url !== 'string' || !url.startsWith('http')) return false;
             const lower = url.toLowerCase();
-            if (lower.includes('.mpd') || lower.includes('.m3u8') || lower.includes('manifest')) return false;
-            if (lower.includes('/audio') || lower.includes('bytestart')) return false;
+            if (lower.includes('.mpd') || lower.includes('/audio') || lower.includes('bytestart')) return false;
             return !(lower.includes('//www.linkedin.com') || lower.includes('//linkedin.com'));
         },
 

@@ -111,9 +111,9 @@ function scoreVideoUrl(url) {
     let score = 0;
     const lower = url.toLowerCase();
     if (lower.includes('.mp4') || lower.includes('.m4v')) score += 15;
-    if (lower.includes('quality_hd') || lower.includes('_hd') || lower.includes('native_hd')) score += 30;
+    if (lower.includes('quality_hd') || lower.includes('_hd') || lower.includes('native_hd') || lower.includes('dash_h264')) score += 30;
     if (lower.includes('video.fbcdn.net')) score += 20;
-    if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('/playlist/') || lower.includes('/manifest/') || lower.includes('stream_type=dash') || lower.includes('dash')) score -= 50;
+    if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('/playlist/') || lower.includes('/manifest/') || lower.includes('stream_type=dash')) score -= 50;
     
     // Aggressive scoring for HD resolutions
     if (lower.includes('1080')) score += 25;
@@ -441,30 +441,105 @@ function injectDownloadButtons() {
             };
 
             const getMediaUrlFallback = (callback, silent = false) => {
-                // 1. Check in-memory intercepted video URLs from fetch/XHR
-                if (isVideo && pageInterceptedVideoUrls.size > 0) {
-                    const platform = PlatformManager.getPlatform();
-                    const cleaned = Array.from(pageInterceptedVideoUrls).map(cleanVideoUrl).filter(Boolean);
-                    const candidates = cleaned.filter(isValidVideoUrl);
-                    const filtered = platform.filterBackgroundUrls ? platform.filterBackgroundUrls(candidates, true) : candidates;
-
-                    if (filtered.length > 0) {
-                        const best = pickBestVideoUrl(filtered);
-                        if (best && isValidVideoUrl(best)) {
-                            callback(best);
-                            return;
+                // Determine target video ID
+                let targetVideoId = media.dataset.videoId || media.dataset.video_id;
+                if (!targetVideoId) {
+                    let p = media;
+                    for (let i = 0; i < 10 && p; i++) {
+                        if (p.dataset && (p.dataset.videoId || p.dataset.video_id)) {
+                            targetVideoId = p.dataset.videoId || p.dataset.video_id;
+                            break;
                         }
+                        const link = p.querySelector ? p.querySelector('a[href*="/reel/"], a[href*="/videos/"], a[href*="watch?v="]') : null;
+                        if (link && link.href) {
+                            const m = link.href.match(/(?:reel\/|videos\/|watch\/?\?v=)(\d+)/);
+                            if (m) { targetVideoId = m[1]; break; }
+                        }
+                        p = p.parentElement;
                     }
                 }
+                if (!targetVideoId) {
+                    const urlMatch = window.location.href.match(/(?:reel\/|videos\/|watch\/?\?v=)(\d+)/);
+                    if (urlMatch) targetVideoId = urlMatch[1];
+                }
 
-                // 2. Direct scan of document <script> tags from content script context
+                const parseScript = (text) => {
+                    if (!text) return null;
+                    const hdM = text.match(/"browser_native_hd_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                    if (hdM && hdM[1]) {
+                        try {
+                            const u = cleanVideoUrl(JSON.parse('"' + hdM[1] + '"'));
+                            if (u && isValidVideoUrl(u)) return u;
+                        } catch(e) {}
+                    }
+                    const qHdM = text.match(/"playable_url_quality_hd"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                    if (qHdM && qHdM[1]) {
+                        try {
+                            const u = cleanVideoUrl(JSON.parse('"' + qHdM[1] + '"'));
+                            if (u && isValidVideoUrl(u)) return u;
+                        } catch(e) {}
+                    }
+                    const progM = text.match(/"progressive_download_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                    if (progM && progM[1]) {
+                        try {
+                            const u = cleanVideoUrl(JSON.parse('"' + progM[1] + '"'));
+                            if (u && isValidVideoUrl(u)) return u;
+                        } catch(e) {}
+                    }
+                    const sdM = text.match(/"browser_native_sd_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                    if (sdM && sdM[1]) {
+                        try {
+                            const u = cleanVideoUrl(JSON.parse('"' + sdM[1] + '"'));
+                            if (u && isValidVideoUrl(u)) return u;
+                        } catch(e) {}
+                    }
+                    const playM = text.match(/"playable_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                    if (playM && playM[1]) {
+                        try {
+                            const u = cleanVideoUrl(JSON.parse('"' + playM[1] + '"'));
+                            if (u && isValidVideoUrl(u)) return u;
+                        } catch(e) {}
+                    }
+                    return null;
+                };
+
+                // 1. Direct scan of document <script> tags
                 if (isVideo) {
                     const scripts = document.querySelectorAll('script[type="application/json"], script:not([src])');
+                    
+                    // Priority 1: Check scripts containing targetVideoId
+                    if (targetVideoId) {
+                        for (const s of scripts) {
+                            const text = s.textContent;
+                            if (text && text.includes(targetVideoId)) {
+                                const found = parseScript(text);
+                                if (found) {
+                                    callback(found);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+
+                    // Priority 2: Check all scripts for native HD / playable URLs
+                    for (const s of scripts) {
+                        const text = s.textContent;
+                        if (text && (text.includes('browser_native_hd_url') || text.includes('playable_url_quality_hd') || text.includes('progressive_download_url'))) {
+                            const found = parseScript(text);
+                            if (found) {
+                                callback(found);
+                                return;
+                            }
+                        }
+                    }
+
+                    // Priority 3: Scan scripts with cdnRegex
                     const scriptCandidates = [];
                     const cdnRegex = /"(https:(?:\\\/\\\/|\/\/)[^"]+?(?:fbcdn\.net|fbsbx\.com)[^"]+?\.(?:mp4|m4v)[^"]*)"/g;
                     for (const s of scripts) {
                         const text = s.textContent;
                         if (!text || (!text.includes('fbcdn.net') && !text.includes('fbsbx.com') && !text.includes('playable_url'))) continue;
+                        cdnRegex.lastIndex = 0;
                         let m;
                         while ((m = cdnRegex.exec(text)) !== null) {
                             try {
@@ -485,24 +560,59 @@ function injectDownloadButtons() {
                     }
                 }
 
-                // 3. Fallback to background script webRequest
-                const mediaType = isVideo ? 'video' : 'img';
-                safeSendMessage({ action: 'getMediaUrls', mediaType: mediaType }, (response) => {
-                    if (response && response.urls && response.urls.length > 0) {
-                        const cleaned = response.urls.map(cleanVideoUrl).filter(Boolean);
+                // 2. Fetch watch page via background script if videoId is known or on Reel/Watch
+                if (targetVideoId || window.location.href.includes('/reel/') || window.location.href.includes('/watch')) {
+                    safeSendMessage({ action: 'fetchMobileFacebookVideo', url: window.location.href, videoId: targetVideoId }, (resp) => {
+                        if (resp && resp.url) {
+                            const clean = cleanVideoUrl(resp.url);
+                            if (clean && isValidVideoUrl(clean)) {
+                                callback(clean);
+                                return;
+                            }
+                        }
+                        fallbackToIntercepted();
+                    });
+                    return;
+                }
+
+                fallbackToIntercepted();
+
+                function fallbackToIntercepted() {
+                    // 3. Check in-memory intercepted video URLs from fetch/XHR
+                    if (isVideo && pageInterceptedVideoUrls.size > 0) {
+                        const platform = PlatformManager.getPlatform();
+                        const cleaned = Array.from(pageInterceptedVideoUrls).map(cleanVideoUrl).filter(Boolean);
                         const candidates = cleaned.filter(isValidVideoUrl);
-                        if (candidates.length > 0) {
-                            const best = pickBestVideoUrl(candidates);
+                        const filtered = platform.filterBackgroundUrls ? platform.filterBackgroundUrls(candidates, true) : candidates;
+
+                        if (filtered.length > 0) {
+                            const best = pickBestVideoUrl(filtered);
                             if (best && isValidVideoUrl(best)) {
                                 callback(best);
                                 return;
                             }
                         }
                     }
-                    if (!silent) {
-                        alert('Could not find the HD video URL yet.\n\nTip: Make sure the video has started playing, then click the button again.');
-                    }
-                });
+
+                    // 4. Fallback to background script webRequest
+                    const mediaType = isVideo ? 'video' : 'img';
+                    safeSendMessage({ action: 'getMediaUrls', mediaType: mediaType }, (response) => {
+                        if (response && response.urls && response.urls.length > 0) {
+                            const cleaned = response.urls.map(cleanVideoUrl).filter(Boolean);
+                            const candidates = cleaned.filter(isValidVideoUrl);
+                            if (candidates.length > 0) {
+                                const best = pickBestVideoUrl(candidates);
+                                if (best && isValidVideoUrl(best)) {
+                                    callback(best);
+                                    return;
+                                }
+                            }
+                        }
+                        if (!silent) {
+                            alert('Could not find the HD video URL yet.\n\nTip: Make sure the video has started playing, then click the button again.');
+                        }
+                    });
+                }
             };
 
             if (window.magicOverlayManager) {

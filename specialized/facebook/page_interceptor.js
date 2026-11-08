@@ -116,7 +116,17 @@
 
         const foundSet = new Set();
 
-        // 1. Direct scan for any CDN MP4 / M4V URL
+        // 1. Priority: Named progressive HD video keys scan
+        const videoRegex = /"(browser_native_hd_url|playable_url_quality_hd|progressive_download_url|browser_native_sd_url|playable_url|hd_src)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
+        let m;
+        while ((m = videoRegex.exec(clean)) !== null) {
+            try {
+                const url = cleanVideoUrl(JSON.parse('"' + m[2] + '"'));
+                if (url && isValidVideo(url)) foundSet.add(url);
+            } catch (err) {}
+        }
+
+        // 2. Direct scan for any CDN MP4 / M4V URL
         const cdnRegex = /"(https:(?:\\\/\\\/|\/\/)[^"]+?(?:fbcdn\.net|fbsbx\.com)[^"]+?\.(?:mp4|m4v)[^"]*)"/g;
         let cdnM;
         while ((cdnM = cdnRegex.exec(clean)) !== null) {
@@ -127,16 +137,6 @@
                 const unescaped = cleanVideoUrl(cdnM[1]);
                 if (unescaped && isValidVideo(unescaped)) foundSet.add(unescaped);
             }
-        }
-
-        // 2. Named keys scan: playable_url_quality_hd, browser_native_hd_url, etc.
-        const videoRegex = /"(playable_url_quality_hd|browser_native_hd_url|playable_url|browser_native_sd_url|hd_src|progressive_download_url)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
-        let m;
-        while ((m = videoRegex.exec(clean)) !== null) {
-            try {
-                const url = cleanVideoUrl(JSON.parse('"' + m[2] + '"'));
-                if (url && isValidVideo(url)) foundSet.add(url);
-            } catch (err) {}
         }
 
         // 3. Try parsing JSON chunks for deep objects
@@ -296,7 +296,16 @@
         let current = el;
         const platform = getPlatform();
 
-        // 1. Traverse React Fiber properties FIRST (attached to actual playing video element)
+        // 1. Priority: DOM / script lookup matched strictly to video ID (Guarantees exact video!)
+        if (isVideoContext && platform.extractVideoUrlFromDOM) {
+            const domUrl = platform.extractVideoUrlFromDOM(el);
+            if (domUrl) {
+                const clean = cleanVideoUrl(domUrl);
+                if (isValidVideo(clean)) return clean;
+            }
+        }
+
+        // 2. Traverse React Fiber properties (attached to actual playing video element)
         for (let i = 0; i < 14 && current; i++) {
             const key = Object.keys(current).find(k =>
                 k.startsWith('__reactProps$') || 
@@ -313,15 +322,6 @@
                 }
             }
             current = current.parentElement;
-        }
-
-        // 2. Fallback: DOM / script lookup matched to video ID
-        if (isVideoContext && platform.extractVideoUrlFromDOM) {
-            const domUrl = platform.extractVideoUrlFromDOM(el);
-            if (domUrl) {
-                const clean = cleanVideoUrl(domUrl);
-                if (isValidVideo(clean)) return clean;
-            }
         }
 
         return null;

@@ -248,81 +248,97 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true });
         return true;
     } else if (request.action === 'fetchMobileFacebookVideo') {
-        const urlObj = new URL(request.url);
-        urlObj.hostname = 'm.facebook.com';
+        let videoId = request.videoId;
+        if (!videoId && request.url) {
+            const vMatch = request.url.match(/(?:videos\/|watch\/?\?v=|reel\/)(\d+)/);
+            if (vMatch) videoId = vMatch[1];
+        }
 
-        fetch(urlObj.toString(), {
+        const targetUrl = videoId
+            ? `https://www.facebook.com/watch/?v=${videoId}&_rdr`
+            : (request.url || 'https://www.facebook.com');
+
+        fetch(targetUrl, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Sec-Fetch-Mode': 'navigate'
             }
         })
         .then(r => r.text())
         .then(html => {
             let videoUrl = null;
 
-            const srcMatch = html.match(/src="([^"]+?\.mp4[^"]*?)"/);
-            if (srcMatch && srcMatch[1]) {
-                videoUrl = srcMatch[1].replace(/&amp;/g, '&').replace(/\\\//g, '/');
-            }
-
-            if (!videoUrl) {
-                const playableMatch = html.match(/"playable_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
-                if (playableMatch && playableMatch[1]) {
-                    try {
-                        videoUrl = JSON.parse('"' + playableMatch[1] + '"');
-                    } catch (e) {}
+            // 1. Check browser_native_hd_url (Progressive 720p HD MP4 with audio)
+            const nativeHdMatch = html.match(/"browser_native_hd_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+            if (nativeHdMatch && nativeHdMatch[1]) {
+                try {
+                    videoUrl = JSON.parse('"' + nativeHdMatch[1] + '"');
+                } catch (e) {
+                    videoUrl = nativeHdMatch[1].replace(/\\\//g, '/').replace(/&amp;/g, '&');
                 }
             }
 
+            // 2. Check playable_url_quality_hd
             if (!videoUrl) {
                 const hdMatch = html.match(/"playable_url_quality_hd"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
                 if (hdMatch && hdMatch[1]) {
                     try {
                         videoUrl = JSON.parse('"' + hdMatch[1] + '"');
-                    } catch (e) {}
+                    } catch (e) {
+                        videoUrl = hdMatch[1].replace(/\\\//g, '/').replace(/&amp;/g, '&');
+                    }
                 }
             }
 
+            // 3. Check progressive_download_url
             if (!videoUrl) {
-                const browserMatch = html.match(/"browser_native_(?:hd|sd)_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
-                if (browserMatch && browserMatch[1]) {
+                const progMatch = html.match(/"progressive_download_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                if (progMatch && progMatch[1]) {
                     try {
-                        videoUrl = JSON.parse('"' + browserMatch[1] + '"');
-                    } catch (e) {}
+                        videoUrl = JSON.parse('"' + progMatch[1] + '"');
+                    } catch (e) {
+                        videoUrl = progMatch[1].replace(/\\\//g, '/').replace(/&amp;/g, '&');
+                    }
                 }
             }
 
+            // 4. Check browser_native_sd_url
             if (!videoUrl) {
-                const playbackMatch = html.match(/"playback_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
-                if (playbackMatch && playbackMatch[1]) {
+                const nativeSdMatch = html.match(/"browser_native_sd_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                if (nativeSdMatch && nativeSdMatch[1]) {
                     try {
-                        videoUrl = JSON.parse('"' + playbackMatch[1] + '"');
-                    } catch (e) {}
+                        videoUrl = JSON.parse('"' + nativeSdMatch[1] + '"');
+                    } catch (e) {
+                        videoUrl = nativeSdMatch[1].replace(/\\\//g, '/').replace(/&amp;/g, '&');
+                    }
                 }
             }
 
+            // 5. Check playable_url
             if (!videoUrl) {
-                const streamMatch = html.match(/"stream_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
-                if (streamMatch && streamMatch[1]) {
+                const playableMatch = html.match(/"playable_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                if (playableMatch && playableMatch[1]) {
                     try {
-                        videoUrl = JSON.parse('"' + streamMatch[1] + '"');
-                    } catch (e) {}
+                        videoUrl = JSON.parse('"' + playableMatch[1] + '"');
+                    } catch (e) {
+                        videoUrl = playableMatch[1].replace(/\\\//g, '/').replace(/&amp;/g, '&');
+                    }
                 }
             }
 
+            // 6. Direct CDN regex scan
             if (!videoUrl) {
-                const baseMatch = html.match(/"base_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
-                if (baseMatch && baseMatch[1]) {
-                    try {
-                        videoUrl = JSON.parse('"' + baseMatch[1] + '"');
-                    } catch (e) {}
+                const srcMatch = html.match(/src="([^"]+?\.mp4[^"]*?)"/);
+                if (srcMatch && srcMatch[1]) {
+                    videoUrl = srcMatch[1].replace(/&amp;/g, '&').replace(/\\\//g, '/');
                 }
             }
 
-            sendResponse({ url: videoUrl });
+            sendResponse({ url: videoUrl, videoId: videoId });
         })
         .catch(err => {
-            console.error("Facebook mobile fetch error:", err);
+            console.error("Facebook watch fetch error:", err);
             sendResponse({ url: null });
         });
         return true;
