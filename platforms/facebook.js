@@ -68,7 +68,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
 
             const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
             const isVideoExt = lower.includes('.mp4') || lower.includes('.m4v') || lower.includes('.webm');
-            const isVideoPath = lower.includes('/v/t64.') || lower.includes('/v/t66.') || lower.includes('/video/') || lower.includes('mime=video') || lower.includes('stream_type=dash') || lower.includes('/o1/v/');
+            const isVideoPath = lower.includes('/v/t64.') || lower.includes('/v/t66.') || lower.includes('/video/') || lower.includes('mime=video') || lower.includes('stream_type=dash') || lower.includes('/o1/v/') || (lower.includes('fbcdn.net') && (lower.includes('/v/') || lower.includes('video.')));
 
             return isCdn && (isVideoExt || isVideoPath);
         },
@@ -627,12 +627,23 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
 
                 // 4. Representations array (common in Facebook DASH/Reels trees)
                 if (Array.isArray(val.representations) && val.representations.length > 0) {
-                    for (const rep of val.representations) {
-                        const repUrl = rep && (rep.base_url || rep.url || rep.playback_url);
-                        if (typeof repUrl === 'string') {
-                            const clean = this.cleanVideoUrl(repUrl);
-                            if (clean && this.isValidVideo(clean)) return clean;
-                        }
+                    const videoReps = val.representations.filter(rep => {
+                        const u = rep && (rep.base_url || rep.url || rep.playback_url);
+                        if (typeof u !== 'string') return false;
+                        const mime = (rep.mime_type || '').toLowerCase();
+                        if (mime.includes('audio')) return false;
+                        const clean = this.cleanVideoUrl(u);
+                        return clean && this.isValidVideo(clean);
+                    });
+                    if (videoReps.length > 0) {
+                        videoReps.sort((a, b) => {
+                            const resA = (a.width || 0) * (a.height || 0);
+                            const resB = (b.width || 0) * (b.height || 0);
+                            if (resB !== resA) return resB - resA;
+                            return (b.bandwidth || 0) - (a.bandwidth || 0);
+                        });
+                        const bestRep = videoReps[0];
+                        return this.cleanVideoUrl(bestRep.base_url || bestRep.url || bestRep.playback_url);
                     }
                 }
             } else {
@@ -702,6 +713,20 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                         const clean = this.cleanVideoUrl(u);
                         if (clean && this.isValidAudio(clean)) return clean;
                     }
+                }
+            }
+            if (Array.isArray(val.representations) && val.representations.length > 0) {
+                const audioReps = val.representations.filter(rep => {
+                    const u = rep && (rep.base_url || rep.url || rep.playback_url);
+                    if (typeof u !== 'string') return false;
+                    const mime = (rep.mime_type || '').toLowerCase();
+                    const clean = this.cleanVideoUrl(u);
+                    return (mime.includes('audio') || this.isAudio(clean)) && clean && this.isValidAudio(clean);
+                });
+                if (audioReps.length > 0) {
+                    audioReps.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
+                    const bestAudioRep = audioReps[0];
+                    return this.cleanVideoUrl(bestAudioRep.base_url || bestAudioRep.url || bestAudioRep.playback_url);
                 }
             }
             return null;
@@ -795,7 +820,60 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                     }
                 }
 
-                // 6. Direct regex search for CDN MP4
+                // 6. Check playback_url
+                const playbackMatch = text.match(/"playback_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                if (playbackMatch && playbackMatch[1]) {
+                    try {
+                        const raw = JSON.parse('"' + playbackMatch[1] + '"');
+                        const clean = this.cleanVideoUrl(raw);
+                        if (this.isValidVideo(clean)) return clean;
+                    } catch(e) {
+                        const clean = this.cleanVideoUrl(playbackMatch[1]);
+                        if (this.isValidVideo(clean)) return clean;
+                    }
+                }
+
+                // 7. Check stream_url
+                const streamMatch = text.match(/"stream_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                if (streamMatch && streamMatch[1]) {
+                    try {
+                        const raw = JSON.parse('"' + streamMatch[1] + '"');
+                        const clean = this.cleanVideoUrl(raw);
+                        if (this.isValidVideo(clean)) return clean;
+                    } catch(e) {
+                        const clean = this.cleanVideoUrl(streamMatch[1]);
+                        if (this.isValidVideo(clean)) return clean;
+                    }
+                }
+
+                // 8. Check unmuted_src
+                const unmutedMatch = text.match(/"unmuted_src"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                if (unmutedMatch && unmutedMatch[1]) {
+                    try {
+                        const raw = JSON.parse('"' + unmutedMatch[1] + '"');
+                        const clean = this.cleanVideoUrl(raw);
+                        if (this.isValidVideo(clean)) return clean;
+                    } catch(e) {
+                        const clean = this.cleanVideoUrl(unmutedMatch[1]);
+                        if (this.isValidVideo(clean)) return clean;
+                    }
+                }
+
+                // 9. Check base_url (DASH representations)
+                const baseUrlRegex = /"base_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
+                let baseM;
+                while ((baseM = baseUrlRegex.exec(text)) !== null) {
+                    try {
+                        const raw = JSON.parse('"' + baseM[1] + '"');
+                        const clean = this.cleanVideoUrl(raw);
+                        if (this.isValidVideo(clean)) return clean;
+                    } catch(e) {
+                        const clean = this.cleanVideoUrl(baseM[1]);
+                        if (this.isValidVideo(clean)) return clean;
+                    }
+                }
+
+                // 10. Direct regex search for CDN MP4 fallback
                 const cdnRegex = /"(https:(?:\\\/\\\/|\/\/)[^"]+?(?:fbcdn\.net|fbsbx\.com)[^"]+?\.(?:mp4|m4v)[^"]*)"/g;
                 let cdnM;
                 while ((cdnM = cdnRegex.exec(text)) !== null) {
@@ -840,6 +918,30 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 for (const s of scripts) {
                     const text = s.textContent;
                     if (text && text.includes(videoId)) {
+                        const found = parseScriptText(text);
+                        if (found) return found;
+                    }
+                }
+            }
+
+            // Pass 2: On dedicated video pages (/reel/, /watch/, /videos/, modal theater):
+            // Scan scripts for high-confidence playable video URLs
+            const isDedicatedPage = window.location.pathname.includes('/reel') ||
+                                    window.location.pathname.includes('/watch') ||
+                                    window.location.pathname.includes('/videos/') ||
+                                    (this.hasActiveModal && this.hasActiveModal());
+            if (isDedicatedPage) {
+                for (const s of scripts) {
+                    const text = s.textContent;
+                    if (text && (
+                        text.includes('playable_url_quality_hd') ||
+                        text.includes('browser_native_hd_url') ||
+                        text.includes('progressive_download_url') ||
+                        text.includes('playable_url') ||
+                        text.includes('playback_url') ||
+                        text.includes('representations') ||
+                        text.includes('base_url')
+                    )) {
                         const found = parseScriptText(text);
                         if (found) return found;
                     }

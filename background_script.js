@@ -35,10 +35,14 @@ chrome.webRequest.onResponseStarted.addListener(
                         (type === 'media') ||
                         (mediaExtensions.some(ext => lowerUrl.includes(ext))) ||
                         lowerUrl.includes('mime=video') ||
+                        lowerUrl.includes('stream_type=dash') ||
                         lowerUrl.includes('/video/') ||
                         lowerUrl.includes('playback') ||
                         lowerUrl.includes('videoplayback') ||
-                        lowerUrl.includes('/v/t64.'));
+                        lowerUrl.includes('/v/t64.') ||
+                        lowerUrl.includes('/v/t66.') ||
+                        lowerUrl.includes('/o1/v/') ||
+                        (lowerUrl.includes('fbcdn.net') && (lowerUrl.includes('/v/') || lowerUrl.includes('video.'))));
 
         const isImage = (type === 'image') ||
                         (imageExtensions.some(ext => lowerUrl.includes(ext))) ||
@@ -280,6 +284,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 if (browserMatch && browserMatch[1]) {
                     try {
                         videoUrl = JSON.parse('"' + browserMatch[1] + '"');
+                    } catch (e) {}
+                }
+            }
+
+            if (!videoUrl) {
+                const playbackMatch = html.match(/"playback_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                if (playbackMatch && playbackMatch[1]) {
+                    try {
+                        videoUrl = JSON.parse('"' + playbackMatch[1] + '"');
+                    } catch (e) {}
+                }
+            }
+
+            if (!videoUrl) {
+                const streamMatch = html.match(/"stream_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                if (streamMatch && streamMatch[1]) {
+                    try {
+                        videoUrl = JSON.parse('"' + streamMatch[1] + '"');
+                    } catch (e) {}
+                }
+            }
+
+            if (!videoUrl) {
+                const baseMatch = html.match(/"base_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                if (baseMatch && baseMatch[1]) {
+                    try {
+                        videoUrl = JSON.parse('"' + baseMatch[1] + '"');
                     } catch (e) {}
                 }
             }
