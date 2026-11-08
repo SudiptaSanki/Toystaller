@@ -91,7 +91,7 @@ function scoreVideoUrl(url) {
     if (lower.includes('.mp4') || lower.includes('.m4v') || lower.includes('.webm')) score += 50;
 
     // Reject / heavily penalize unplayable fragments and manifests
-    if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('/playlist/') || lower.includes('/manifest/') || lower.includes('stream_type=dash') || lower.includes('dash')) score -= 100;
+    if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('/playlist/') || lower.includes('/manifest/')) score -= 100;
     if (lower.includes('bytestart') || lower.includes('byteend')) score -= 100;
 
     // Heavily penalize image thumbnails to prevent them being picked as videos
@@ -138,7 +138,7 @@ function pickBestVideoUrl(urls) {
         if (lower.includes('bytestart') || lower.includes('byteend')) return false;
         if (lower.includes('videocover') || lower.includes('/image/') || lower.includes('.jpg') || lower.includes('.png') || lower.includes('.webp')) return false;
         // Reject streaming manifests that cause black screens
-        if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('stream_type=dash')) return false;
+        if (lower.includes('.m3u8') || lower.includes('.mpd')) return false;
         return true;
     });
     if (playable.length === 0) {
@@ -471,6 +471,44 @@ function injectDownloadButtons() {
                 });
                 buttons.push(openBtn);
 
+                // Purple Button: Open / Download Audio in new tab
+                let audioBtn = null;
+                if (isVideo) {
+                    audioBtn = document.createElement('button');
+                    audioBtn.className = 'magic-audio-btn';
+                    audioBtn.title = 'Open or download audio only in new tab';
+                    audioBtn.innerHTML = `<svg width="${iconSize}" height="${iconSize}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`;
+                    audioBtn.style.cssText = makeBtnStyle('rgba(30,30,30,0.75)');
+                    audioBtn.style.display = 'none';
+
+                    audioBtn.addEventListener('mouseenter', () => {
+                        audioBtn.style.opacity = '1';
+                        audioBtn.style.backgroundColor = 'rgba(142, 68, 173, 0.95)';
+                    });
+                    audioBtn.addEventListener('mouseleave', () => {
+                        audioBtn.style.opacity = '0.55';
+                        audioBtn.style.backgroundColor = 'rgba(30,30,30,0.75)';
+                    });
+                    audioBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const platform = PlatformManager.getPlatform();
+                        const platformName = platform.name || '';
+                        getMediaUrl((url, audioUrl) => {
+                            const target = audioUrl || url;
+                            if (!target) return;
+                            safeSendMessage({ 
+                                action: 'openInNewTab', 
+                                url: target, 
+                                audioUrl: target,
+                                isVideo: true, 
+                                platform: platformName 
+                            });
+                        });
+                    });
+                    buttons.push(audioBtn);
+                }
+
                 // Red Button: Open Thumbnail/Image in new tab (same arrow icon, red hover)
                 const imgBtn = document.createElement('button');
                 imgBtn.className = 'magic-img-btn';
@@ -573,8 +611,8 @@ function injectDownloadButtons() {
                 return buttons;
             };
 
-            // Pre-resolve video URL to conditionally show/hide the blue button
-            const preResolveVideoUrl = (openBtn) => {
+            // Pre-resolve video URL to conditionally show/hide the action buttons
+            const preResolveVideoUrl = (openBtn, audioBtn) => {
                 if (!isVideo) return;
                 getMediaUrl((url, audioUrl) => {
                     if (url) {
@@ -582,6 +620,7 @@ function injectDownloadButtons() {
                         openBtn.__resolvedVideoUrl = url;
                         openBtn.__resolvedAudioUrl = audioUrl || null;
                         openBtn.style.display = 'flex';
+                        if (audioBtn) audioBtn.style.display = 'flex';
                     }
                     // If no URL found, button stays hidden
                 }, true); // Silent check
@@ -657,9 +696,16 @@ function injectDownloadButtons() {
                     const platformVideos = platform.filterBackgroundUrls ? platform.filterBackgroundUrls(Array.from(pageInterceptedVideoUrls), true) : Array.from(pageInterceptedVideoUrls);
 
                     if (platformVideos.length > 0) {
-                        // Prioritize recent candidates: user just scrolled to or interacted with this video
-                        const recentVideos = platformVideos.slice(-5);
-                        const best = pickBestVideoUrl(recentVideos) || pickBestVideoUrl(platformVideos);
+                        // Check if any candidate explicitly matches the post or video ID
+                        let matchedVideos = [];
+                        const postUrl = findPostPermalink ? findPostPermalink(media) : null;
+                        const idMatch = (postUrl || window.location.href).match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=)(\d+)/);
+                        if (idMatch && idMatch[1]) {
+                            matchedVideos = platformVideos.filter(u => u.includes(idMatch[1]));
+                        }
+
+                        const targetPool = matchedVideos.length > 0 ? matchedVideos : platformVideos.slice(-5);
+                        const best = pickBestVideoUrl(targetPool) || pickBestVideoUrl(platformVideos);
                         const bestAudio = pickBestAudioUrl(Array.from(pageInterceptedVideoUrls).slice(-5)) || pickBestAudioUrl(Array.from(pageInterceptedVideoUrls));
                         if (best) {
                             callback(best, bestAudio);
@@ -759,8 +805,9 @@ function injectDownloadButtons() {
                         const overlay = window.magicOverlayManager.overlays.get(media);
                         if (overlay && overlay.container) {
                             const openBtn = overlay.container.querySelector('.magic-open-btn');
+                            const audioBtn = overlay.container.querySelector('.magic-audio-btn');
                             if (openBtn) {
-                                preResolveVideoUrl(openBtn);
+                                preResolveVideoUrl(openBtn, audioBtn);
                             }
                         }
                     }, 100);

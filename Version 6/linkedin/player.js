@@ -243,7 +243,10 @@
             videoPlayer.style.display = 'block';
             imageViewer.style.display = 'none';
             if (shortcutsText) shortcutsText.style.display = 'inline-flex';
-            if (formatText) formatText.textContent = 'Direct Master Audio + Video';
+            if (formatText) formatText.textContent = activeAudioUrl ? 'Direct Master Audio + Video' : 'Direct Master Media';
+
+            if (dlAudioBtn) dlAudioBtn.style.display = 'inline-flex';
+            if (copyAudioBtn) copyAudioBtn.style.display = 'inline-flex';
 
             dlBtn.innerHTML = `
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
@@ -325,6 +328,9 @@
             imageViewer.style.display = 'block';
             if (shortcutsText) shortcutsText.style.display = 'none';
             if (formatText) formatText.textContent = 'High-Resolution Image';
+
+            if (dlAudioBtn) dlAudioBtn.style.display = 'none';
+            if (copyAudioBtn) copyAudioBtn.style.display = 'none';
 
             dlBtn.innerHTML = `
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
@@ -423,8 +429,9 @@
     // Copy Audio handler
     if (copyAudioBtn) {
         copyAudioBtn.addEventListener('click', () => {
-            if (!activeAudioUrl) return;
-            navigator.clipboard.writeText(activeAudioUrl).then(() => {
+            const targetAudio = activeAudioUrl || activeDownloadUrl;
+            if (!targetAudio) return;
+            navigator.clipboard.writeText(targetAudio).then(() => {
                 copyAudioBtn.textContent = 'Audio Copied!';
                 setTimeout(() => {
                     copyAudioBtn.innerHTML = `
@@ -439,11 +446,16 @@
     // Download Audio handler
     if (dlAudioBtn) {
         dlAudioBtn.addEventListener('click', () => {
-            if (!activeAudioUrl) return;
+            const targetAudio = activeAudioUrl || activeDownloadUrl;
+            if (!targetAudio) return;
+            const ext = 'mp3';
+            const base = (platformParam || 'Toystaller').replace(/[^a-zA-Z0-9]/g, '_');
+            const dlFilename = activeAudioFilename || `${base}_Audio_${Date.now()}.${ext}`;
+
             chrome.runtime.sendMessage({
                 action: 'downloadMedia',
-                url: activeAudioUrl,
-                filename: activeAudioFilename || `Toystaller_Audio_${Date.now()}.mp3`
+                url: targetAudio,
+                filename: dlFilename
             }, (response) => {
                 if (response && response.success) {
                     dlAudioBtn.innerHTML = `

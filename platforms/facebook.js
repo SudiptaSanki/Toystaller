@@ -56,7 +56,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             if (lower.startsWith('blob:') || lower.startsWith('data:')) return false;
             if (lower.includes('facebook.com') || lower.includes('messenger.com') || lower.includes('instagram.com')) return false;
             if (lower.includes('unified_cvc')) return false;
-            if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('stream_type=dash')) return false;
+            if (lower.includes('.m3u8') || lower.includes('.mpd')) return false;
             
             // Strictly reject audio-only tracks (e.g. /v/t42. or mime=audio)
             if (this.isAudio(url)) return false;
@@ -68,7 +68,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
 
             const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
             const isVideoExt = lower.includes('.mp4') || lower.includes('.m4v') || lower.includes('.webm');
-            const isVideoPath = lower.includes('/v/t64.') || lower.includes('/v/t66.') || lower.includes('/video/') || lower.includes('mime=video');
+            const isVideoPath = lower.includes('/v/t64.') || lower.includes('/v/t66.') || lower.includes('/video/') || lower.includes('mime=video') || lower.includes('stream_type=dash') || lower.includes('/o1/v/');
 
             return isCdn && (isVideoExt || isVideoPath);
         },
@@ -613,6 +613,8 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                     val.playback_url,
                     val.progressiveUrl,
                     val.streamingUrl,
+                    val.stream_url,
+                    val.unmuted_src,
                     val.video_url,
                     val.videoUrl
                 ];
@@ -620,6 +622,17 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                     if (typeof c === 'string') {
                         const clean = this.cleanVideoUrl(c);
                         if (clean && this.isValidVideo(clean)) return clean;
+                    }
+                }
+
+                // 4. Representations array (common in Facebook DASH/Reels trees)
+                if (Array.isArray(val.representations) && val.representations.length > 0) {
+                    for (const rep of val.representations) {
+                        const repUrl = rep && (rep.base_url || rep.url || rep.playback_url);
+                        if (typeof repUrl === 'string') {
+                            const clean = this.cleanVideoUrl(repUrl);
+                            if (clean && this.isValidVideo(clean)) return clean;
+                        }
                     }
                 }
             } else {
@@ -827,22 +840,6 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 for (const s of scripts) {
                     const text = s.textContent;
                     if (text && text.includes(videoId)) {
-                        const found = parseScriptText(text);
-                        if (found) return found;
-                    }
-                }
-            }
-
-            // Pass 2: Strictly limit global script scanning to dedicated single-video views
-            // (prevents multi-video feeds from ever reusing the first post's video script)
-            const isSingleVideoView = window.location.pathname.includes('/watch') ||
-                                      window.location.pathname.includes('/reel') ||
-                                      window.location.pathname.includes('/videos/') ||
-                                      (this.hasActiveModal && this.hasActiveModal());
-            if (isSingleVideoView) {
-                for (const s of scripts) {
-                    const text = s.textContent;
-                    if (text && (text.includes('playable_url_quality_hd') || text.includes('browser_native_hd_url') || text.includes('progressive_download_url') || text.includes('playable_url'))) {
                         const found = parseScriptText(text);
                         if (found) return found;
                     }
