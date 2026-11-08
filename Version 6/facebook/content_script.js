@@ -165,11 +165,13 @@ function pickBestVideoUrl(urls) {
 function pickBestAudioUrl(urls) {
     if (!urls || urls.length === 0) return null;
     const audios = urls.filter(u => {
+        if (!u || typeof u !== 'string') return false;
         const lower = u.toLowerCase();
         return (lower.includes('/v/t42.') || lower.includes('mime=audio') || lower.includes('mime%3daudio') || lower.includes('stream_type=audio') || lower.includes('/audio/') || lower.includes('audio_')) &&
                !lower.includes('bytestart') && !lower.includes('manifest');
     });
-    return audios[0] || null;
+    if (audios.length === 0) return null;
+    return audios[audios.length - 1];
 }
 
 function isRawMediaTab() {
@@ -635,6 +637,7 @@ function injectDownloadButtons() {
                             getMediaUrlFallback(callback, silent);
                         }
                     };
+                    media.setAttribute('data-magic-id', magicId);
                     window.addEventListener('message', handler);
                     window.postMessage({ type: 'magic_get_react_url', id: magicId, isVideo: isVideo }, '*');
 
@@ -643,7 +646,7 @@ function injectDownloadButtons() {
                         resolved = true;
                         window.removeEventListener('message', handler);
                         getMediaUrlFallback(callback, silent);
-                    }, 600);
+                    }, 800);
                     return;
                 }
 
@@ -655,29 +658,32 @@ function injectDownloadButtons() {
                 const isBlobSource = currentSrc.startsWith('blob:') || currentSrc.startsWith('data:');
                 const host = window.location.hostname.toLowerCase();
 
-                // Social platform blob: fallback since they use blob: URLs and filename matching is impossible.
-                // Grab the best platform-specific CDN video URL from intercepted URLs.
+                // 1. Social platform blob: fallback since they use blob: URLs and filename matching is impossible.
+                // Grab the best platform-specific CDN video URL from intercepted page URLs (GraphQL/API).
                 if (isVideo && isBlobSource && pageInterceptedVideoUrls.size > 0) {
                     const platform = PlatformManager.getPlatform();
                     const platformVideos = platform.filterBackgroundUrls ? platform.filterBackgroundUrls(Array.from(pageInterceptedVideoUrls), true) : Array.from(pageInterceptedVideoUrls);
 
                     if (platformVideos.length > 0) {
-                        // Check if any candidate explicitly matches the post or video ID
                         let matchedVideos = [];
                         const postUrl = findPostPermalink ? findPostPermalink(media) : null;
-                        const idMatch = (postUrl || window.location.href).match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=|fbid=)(\d+)/);
+                        const idMatch = (postUrl || window.location.href).match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=|fbid=)([a-zA-Z0-9]+)/);
                         if (idMatch && idMatch[1]) {
                             matchedVideos = platformVideos.filter(u => u.includes(idMatch[1]));
                         }
 
-                        if (matchedVideos.length > 0) {
-                            const best = pickBestVideoUrl(matchedVideos);
-                            let matchedAudios = Array.from(pageInterceptedVideoUrls).filter(u => u.includes(idMatch[1]));
-                            const bestAudio = pickBestAudioUrl(matchedAudios) || null;
-                            if (best) {
-                                callback(best, bestAudio, null);
-                                return;
+                        // If matched with ID in URL use that; otherwise take recent candidates from currently playing video!
+                        const candidateVideos = matchedVideos.length > 0 ? matchedVideos : platformVideos.slice(-5);
+                        const best = pickBestVideoUrl(candidateVideos);
+                        if (best) {
+                            let candidateAudios = Array.from(pageInterceptedVideoUrls);
+                            if (idMatch && idMatch[1]) {
+                                const idAudios = candidateAudios.filter(u => u.includes(idMatch[1]));
+                                if (idAudios.length > 0) candidateAudios = idAudios;
                             }
+                            const bestAudio = pickBestAudioUrl(candidateAudios.slice(-5)) || pickBestAudioUrl(candidateAudios) || null;
+                            callback(best, bestAudio, null);
+                            return;
                         }
                     }
                 }
@@ -700,9 +706,9 @@ function injectDownloadButtons() {
 
                     if (matches.length > 0) {
                         const best = pickBestVideoUrl(matches);
-                        const bestAudio = pickBestAudioUrl(Array.from(pageInterceptedVideoUrls));
+                        const bestAudio = pickBestAudioUrl(Array.from(pageInterceptedVideoUrls).slice(-5)) || pickBestAudioUrl(Array.from(pageInterceptedVideoUrls));
                         if (best) {
-                            callback(best, bestAudio);
+                            callback(best, bestAudio, null);
                             return;
                         }
                     }
@@ -720,12 +726,12 @@ function injectDownloadButtons() {
                     !media.currentSrc.startsWith('blob:') &&
                     !media.currentSrc.startsWith('data:') &&
                     !isInternalPage(media.currentSrc)) {
-                    callback(media.currentSrc, null);
+                    callback(media.currentSrc, null, null);
                     return;
                 }
 
                 if (media.src && !media.src.startsWith('blob:') && !media.src.startsWith('data:') && !isInternalPage(media.src)) {
-                    callback(media.src, null);
+                    callback(media.src, null, null);
                     return;
                 }
 
@@ -735,12 +741,12 @@ function injectDownloadButtons() {
                         !sourceTag.src.startsWith('blob:') &&
                         !sourceTag.src.startsWith('data:') &&
                         !isInternalPage(sourceTag.src)) {
-                        callback(sourceTag.src, null);
+                        callback(sourceTag.src, null, null);
                         return;
                     }
                 }
 
-                // Last resort: ask background script for network-intercepted URLs
+                // 2. Last resort: ask background script for network-intercepted URLs (webRequest)
                 const mediaType = isVideo ? 'video' : 'img';
                 safeSendMessage({ action: 'getMediaUrls', mediaType: mediaType }, (response) => {
                     if (response && response.urls && response.urls.length > 0) {
@@ -749,18 +755,25 @@ function injectDownloadButtons() {
                         const filtered = platform.filterBackgroundUrls ? platform.filterBackgroundUrls(candidates, isVideo) : candidates;
                         if (filtered && filtered.length > 0) candidates = filtered;
 
+                        let matched = [];
                         const postUrl = findPostPermalink ? findPostPermalink(media) : null;
-                        const idMatch = (postUrl || window.location.href).match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=|fbid=)(\d+)/);
+                        const idMatch = (postUrl || window.location.href).match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=|fbid=)([a-zA-Z0-9]+)/);
                         if (idMatch && idMatch[1]) {
-                            const matched = candidates.filter(u => u.includes(idMatch[1]));
-                            if (matched.length > 0) {
-                                const best = pickBestVideoUrl(matched);
-                                const bestAudio = response.audioUrls ? pickBestAudioUrl(response.audioUrls.filter(u => u.includes(idMatch[1]))) : null;
-                                if (best) {
-                                    callback(best, bestAudio, null);
-                                    return;
-                                }
+                            matched = candidates.filter(u => u.includes(idMatch[1]));
+                        }
+
+                        // If matched with ID in URL use that; otherwise take recent candidates from currently playing video!
+                        const finalCandidates = matched.length > 0 ? matched : candidates.slice(-5);
+                        const best = pickBestVideoUrl(finalCandidates);
+                        if (best) {
+                            let audioCandidates = response.audioUrls || [];
+                            if (idMatch && idMatch[1]) {
+                                const idAudios = audioCandidates.filter(u => u.includes(idMatch[1]));
+                                if (idAudios.length > 0) audioCandidates = idAudios;
                             }
+                            const bestAudio = pickBestAudioUrl(audioCandidates.slice(-5)) || pickBestAudioUrl(audioCandidates) || null;
+                            callback(best, bestAudio, null);
+                            return;
                         }
                     }
                     if (!silent) {

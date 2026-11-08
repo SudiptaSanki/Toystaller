@@ -176,9 +176,12 @@
         if (dlAudioBtn) dlAudioBtn.style.display = 'inline-flex';
         if (copyAudioBtn) copyAudioBtn.style.display = 'inline-flex';
 
-        const isSeparateVideoStream = activeDownloadUrl && (
+        const isSeparateVideoStream = activeAudioUrl && (
+            !activeDownloadUrl ||
             activeDownloadUrl.includes('stream_type=dash') ||
-            activeDownloadUrl.includes('/o1/v/')
+            activeDownloadUrl.includes('/o1/v/') ||
+            activeMutedUrl ||
+            (platformParam && platformParam.toLowerCase() === 'facebook')
         );
 
         if (audioPlayer) {
@@ -293,7 +296,7 @@
                 if (copyAudioBtn) copyAudioBtn.style.display = 'inline-flex';
             }
 
-            const effectiveMuted = activeMutedUrl || (isDash ? sourceUrl : null);
+            const effectiveMuted = activeMutedUrl || (activeAudioUrl ? sourceUrl : (isDash ? sourceUrl : null));
             if (effectiveMuted) {
                 if (dlMutedBtn) dlMutedBtn.style.display = 'inline-flex';
                 if (copyMutedBtn) copyMutedBtn.style.display = 'inline-flex';

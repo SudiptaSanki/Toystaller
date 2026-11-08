@@ -68,7 +68,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
 
             const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
             const isVideoExt = lower.includes('.mp4') || lower.includes('.m4v') || lower.includes('.webm');
-            const isVideoPath = lower.includes('/v/t64.') || lower.includes('/v/t66.') || lower.includes('/video/') || lower.includes('mime=video') || lower.includes('/o1/v/');
+            const isVideoPath = lower.includes('/v/') || lower.includes('/o1/v/') || lower.includes('/video/') || lower.includes('mime=video') || lower.includes('video.');
 
             return isCdn && (isVideoExt || isVideoPath);
         },
@@ -80,9 +80,12 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             if (lower.startsWith('blob:') || lower.startsWith('data:')) return false;
             if (lower.includes('facebook.com') || lower.includes('messenger.com') || lower.includes('instagram.com')) return false;
             if (this.isAudio(url)) return false;
-            if (lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('videocover')) return false;
+            if (lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('videocover') || lower.includes('/t15.')) return false;
+            if (lower.includes('.m3u8') || lower.includes('.mpd')) return false;
             const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
-            return isCdn && (lower.includes('stream_type=dash') || lower.includes('/o1/v/') || lower.includes('/v/t64.') || lower.includes('/v/t66.'));
+            const isVideoExt = lower.includes('.mp4') || lower.includes('.m4v') || lower.includes('.webm');
+            const isVideoPath = lower.includes('/v/') || lower.includes('/o1/v/') || lower.includes('/video/') || lower.includes('mime=video') || lower.includes('video.') || lower.includes('stream_type=dash');
+            return isCdn && (isVideoExt || isVideoPath);
         },
 
         cleanVideoUrl(url) {
@@ -685,9 +688,14 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             if (!val || typeof val !== 'object') return null;
             const dashCandidates = [
                 val.playback_url,
+                val.playbackUrl,
                 val.streamingUrl,
                 val.stream_url,
-                val.unmuted_src
+                val.streamUrl,
+                val.unmuted_src,
+                val.unmutedSrc,
+                val.dash_manifest_url,
+                val.dashManifestUrl
             ];
             for (const c of dashCandidates) {
                 if (typeof c === 'string') {
@@ -697,9 +705,9 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             }
             if (Array.isArray(val.representations) && val.representations.length > 0) {
                 const videoReps = val.representations.filter(rep => {
-                    const u = rep && (rep.base_url || rep.url || rep.playback_url);
+                    const u = rep && (rep.base_url || rep.baseUrl || rep.url || rep.playback_url || rep.playbackUrl);
                     if (typeof u !== 'string') return false;
-                    const mime = (rep.mime_type || '').toLowerCase();
+                    const mime = (rep.mime_type || rep.mimeType || '').toLowerCase();
                     if (mime.includes('audio')) return false;
                     const clean = this.cleanVideoUrl(u);
                     return clean && this.isValidDashVideo(clean);
@@ -712,7 +720,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                         return (b.bandwidth || 0) - (a.bandwidth || 0);
                     });
                     const bestRep = videoReps[0];
-                    return this.cleanVideoUrl(bestRep.base_url || bestRep.url || bestRep.playback_url);
+                    return this.cleanVideoUrl(bestRep.base_url || bestRep.baseUrl || bestRep.url || bestRep.playback_url || bestRep.playbackUrl);
                 }
             }
             return null;
@@ -724,7 +732,9 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 val.audio_url,
                 val.audioUrl,
                 val.audio_src,
-                val.audio_playback_url
+                val.audioSrc,
+                val.audio_playback_url,
+                val.audioPlaybackUrl
             ];
             for (const c of audioCandidates) {
                 if (typeof c === 'string') {
@@ -743,9 +753,9 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             }
             if (Array.isArray(val.representations) && val.representations.length > 0) {
                 const audioReps = val.representations.filter(rep => {
-                    const u = rep && (rep.base_url || rep.url || rep.playback_url);
+                    const u = rep && (rep.base_url || rep.baseUrl || rep.url || rep.playback_url || rep.playbackUrl);
                     if (typeof u !== 'string') return false;
-                    const mime = (rep.mime_type || '').toLowerCase();
+                    const mime = (rep.mime_type || rep.mimeType || '').toLowerCase();
                     const clean = this.cleanVideoUrl(u);
                     const isCdn = clean && (clean.includes('fbcdn.net') || clean.includes('fbsbx.com'));
                     return isCdn && (mime.includes('audio') || this.isAudio(clean));
@@ -753,7 +763,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 if (audioReps.length > 0) {
                     audioReps.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
                     const bestAudioRep = audioReps[0];
-                    return this.cleanVideoUrl(bestAudioRep.base_url || bestAudioRep.url || bestAudioRep.playback_url);
+                    return this.cleanVideoUrl(bestAudioRep.base_url || bestAudioRep.baseUrl || bestAudioRep.url || bestAudioRep.playback_url || bestAudioRep.playbackUrl);
                 }
             }
             return null;
@@ -762,7 +772,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
         filterBackgroundUrls(candidates, isVideo) {
             return candidates.filter(u => {
                 if (isVideo) {
-                    return this.isValidVideo(u);
+                    return this.isValidVideo(u) || this.isValidDashVideo(u);
                 } else {
                     const lower = (u || '').toLowerCase();
                     if (lower.includes('.mp4') || lower.includes('video.fbcdn.net')) return false;
@@ -922,7 +932,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 }
                 const link = current.querySelector ? current.querySelector('a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"], a[href*="story_fbid="], a[href*="/posts/"], a[href*="fbid="]') : null;
                 if (link && link.href) {
-                    const m = link.href.match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=|fbid=)(\d+)/);
+                    const m = link.href.match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=|fbid=)([a-zA-Z0-9]+)/);
                     if (m && m[1]) return m[1];
                 }
                 if (current.getAttribute && (current.getAttribute('role') === 'article' || (current.dataset && current.dataset.pagelet && current.dataset.pagelet.startsWith('FeedUnit')))) {
@@ -932,7 +942,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             }
 
             // 3. Fallback to URL route if on a dedicated Reel or Watch URL
-            const urlMatch = window.location.href.match(/(?:videos\/|watch\/?\?v=|reel\/)(\d+)/);
+            const urlMatch = window.location.href.match(/(?:videos\/|watch\/?\?v=|reel\/)([a-zA-Z0-9]+)/);
             if (urlMatch && urlMatch[1]) return urlMatch[1];
 
             return null;

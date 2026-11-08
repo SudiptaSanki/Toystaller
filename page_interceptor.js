@@ -58,6 +58,14 @@
                 if (platformFound) {
                     found.add(platformFound);
                 }
+                const audioFound = platform.extractPriorityAudioUrl && platform.extractPriorityAudioUrl(val);
+                if (audioFound) {
+                    found.add(audioFound);
+                }
+                const dashFound = platform.extractDashVideoFromReact && platform.extractDashVideoFromReact(val);
+                if (dashFound) {
+                    found.add(dashFound);
+                }
                 findVideoUrls(val, found, depth + 1);
             }
         }
@@ -231,25 +239,47 @@
         return null;
     }
 
+    function searchObjForDashVideoUrl(obj, seen = new Set(), depth = 0) {
+        if (depth > 20 || !obj || typeof obj !== 'object') return null;
+        if (seen.has(obj)) return null;
+        seen.add(obj);
+
+        const platform = getPlatform();
+
+        if (Array.isArray(obj)) {
+            for (let item of obj) {
+                const res = searchObjForDashVideoUrl(item, seen, depth + 1);
+                if (res) return res;
+            }
+        } else {
+            if (platform.extractDashVideoFromReact) {
+                const found = platform.extractDashVideoFromReact(obj);
+                if (found) return found;
+            }
+            for (let key of Object.keys(obj)) {
+                if (key === 'return' || key === 'sibling' || key === '_owner' || key === 'parent') continue;
+                const val = obj[key];
+                if (typeof val === 'string') {
+                    if (platform.isValidDashVideo && platform.isValidDashVideo(val)) {
+                        return val;
+                    }
+                } else if (typeof val === 'object' && val !== null) {
+                    const nested = searchObjForDashVideoUrl(val, seen, depth + 1);
+                    if (nested) return nested;
+                }
+            }
+        }
+        return null;
+    }
+
     function extractMediaBundle(el, isVideoContext = true) {
         if (!el) return { url: null, audioUrl: null, mutedUrl: null };
         const platform = getPlatform();
 
-        function isPostBoundary(node) {
-            if (!node || node === document.body || node === document.documentElement) return true;
-            if (node.getAttribute) {
-                const role = (node.getAttribute('role') || '').toLowerCase();
-                if (role === 'feed' || role === 'main') return true;
-                const pagelet = (node.getAttribute('data-pagelet') || '');
-                if (pagelet.startsWith('Feed') && !pagelet.startsWith('FeedUnit')) return true;
-            }
-            return false;
-        }
-
         // Pass 1: Try React Fiber for PROGRESSIVE videos (complete with audio)
         let progressiveUrl = null;
         let current = el;
-        for (let i = 0; i < 8 && current && !isPostBoundary(current); i++) {
+        for (let i = 0; i < 14 && current; i++) {
             const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
                 k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
             if (key && current[key]) {
@@ -258,9 +288,6 @@
                     progressiveUrl = found;
                     break;
                 }
-            }
-            if (current.getAttribute && (current.getAttribute('role') === 'article' || (current.dataset && current.dataset.pagelet && (current.dataset.pagelet.startsWith('FeedUnit') || current.dataset.pagelet.startsWith('Reel'))))) {
-                break;
             }
             current = current.parentElement;
         }
@@ -276,7 +303,7 @@
         // Pass 3: Audio URL extraction
         let audioUrl = null;
         current = el;
-        for (let i = 0; i < 8 && current && !isPostBoundary(current); i++) {
+        for (let i = 0; i < 14 && current; i++) {
             const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
                 k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
             if (key && current[key]) {
@@ -285,9 +312,6 @@
                     audioUrl = foundAudio;
                     break;
                 }
-            }
-            if (current.getAttribute && (current.getAttribute('role') === 'article' || (current.dataset && current.dataset.pagelet && (current.dataset.pagelet.startsWith('FeedUnit') || current.dataset.pagelet.startsWith('Reel'))))) {
-                break;
             }
             current = current.parentElement;
         }
@@ -298,17 +322,15 @@
         // Pass 4: DASH / Muted Video URL extraction
         let dashVideoUrl = null;
         current = el;
-        for (let i = 0; i < 8 && current && !isPostBoundary(current); i++) {
+        for (let i = 0; i < 14 && current; i++) {
             const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
                 k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
             if (key && current[key]) {
-                if (platform.extractDashVideoFromReact) {
-                    dashVideoUrl = platform.extractDashVideoFromReact(current[key]);
-                    if (dashVideoUrl) break;
+                const foundDash = searchObjForDashVideoUrl(current[key], new Set(), 0);
+                if (foundDash) {
+                    dashVideoUrl = foundDash;
+                    break;
                 }
-            }
-            if (current.getAttribute && (current.getAttribute('role') === 'article' || (current.dataset && current.dataset.pagelet && (current.dataset.pagelet.startsWith('FeedUnit') || current.dataset.pagelet.startsWith('Reel'))))) {
-                break;
             }
             current = current.parentElement;
         }
