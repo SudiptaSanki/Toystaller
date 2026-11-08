@@ -587,8 +587,22 @@ function injectDownloadButtons() {
                 }, true); // Silent check
             };
 
+            const findPostPermalink = (mediaEl) => {
+                let cur = mediaEl;
+                for (let i = 0; i < 20 && cur; i++) {
+                    const link = cur.querySelector ? cur.querySelector('a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"], a[href*="story_fbid="], a[href*="/posts/"]') : null;
+                    if (link && link.href) return link.href;
+                    cur = cur.parentElement;
+                }
+                const href = window.location.href;
+                if (href.includes('/watch') || href.includes('/reel') || href.includes('/videos/')) {
+                    return href;
+                }
+                return null;
+            };
+
             const getMediaUrl = (callback, silent = false) => {
-                // Step 1: Try React Fiber extraction (works on Instagram)
+                // Step 1: Try React Fiber extraction (works on Instagram & Facebook)
                 if (isVideo) {
                     let resolved = false;
                     const handler = (e) => {
@@ -600,17 +614,20 @@ function injectDownloadButtons() {
                             callback(e.data.url, e.data.audioUrl || null);
                         } else {
                             if (window.location.hostname.includes('facebook.com') && isVideo) {
-                                // Fallback for Facebook: attempt mobile site extraction via background script
-                                safeSendMessage({ action: 'fetchMobileFacebookVideo', url: window.location.href }, (response) => {
-                                    if (response && response.url) {
-                                        callback(response.url, null);
-                                    } else {
-                                        getMediaUrlFallback(callback, silent);
-                                    }
-                                });
-                            } else {
-                                getMediaUrlFallback(callback, silent);
+                                // Fallback for Facebook: ONLY attempt mobile site extraction if we have a specific video permalink
+                                const postUrl = findPostPermalink(media);
+                                if (postUrl) {
+                                    safeSendMessage({ action: 'fetchMobileFacebookVideo', url: postUrl }, (response) => {
+                                        if (response && response.url) {
+                                            callback(response.url, null);
+                                        } else {
+                                            getMediaUrlFallback(callback, silent);
+                                        }
+                                    });
+                                    return;
+                                }
                             }
+                            getMediaUrlFallback(callback, silent);
                         }
                     };
                     window.addEventListener('message', handler);
@@ -621,7 +638,7 @@ function injectDownloadButtons() {
                         resolved = true;
                         window.removeEventListener('message', handler);
                         getMediaUrlFallback(callback, silent);
-                    }, 300);
+                    }, 600);
                     return;
                 }
 
@@ -640,8 +657,10 @@ function injectDownloadButtons() {
                     const platformVideos = platform.filterBackgroundUrls ? platform.filterBackgroundUrls(Array.from(pageInterceptedVideoUrls), true) : Array.from(pageInterceptedVideoUrls);
 
                     if (platformVideos.length > 0) {
-                        const best = pickBestVideoUrl(platformVideos);
-                        const bestAudio = pickBestAudioUrl(Array.from(pageInterceptedVideoUrls));
+                        // Prioritize recent candidates: user just scrolled to or interacted with this video
+                        const recentVideos = platformVideos.slice(-5);
+                        const best = pickBestVideoUrl(recentVideos) || pickBestVideoUrl(platformVideos);
+                        const bestAudio = pickBestAudioUrl(Array.from(pageInterceptedVideoUrls).slice(-5)) || pickBestAudioUrl(Array.from(pageInterceptedVideoUrls));
                         if (best) {
                             callback(best, bestAudio);
                             return;

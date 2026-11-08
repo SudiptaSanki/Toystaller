@@ -799,30 +799,30 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 return null;
             };
 
-            // 1. Identify Video ID if available
+            // 1. Identify specific Video ID from element or enclosing post container
             let videoId = null;
             let current = el;
-            for (let i = 0; i < 10 && current; i++) {
+            for (let i = 0; i < 20 && current; i++) {
                 if (current.dataset && (current.dataset.videoId || current.dataset.video_id)) {
                     videoId = current.dataset.videoId || current.dataset.video_id;
                     break;
                 }
-                const link = current.querySelector ? current.querySelector('a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"]') : null;
+                const link = current.querySelector ? current.querySelector('a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"], a[href*="story_fbid="], a[href*="/posts/"]') : null;
                 if (link && link.href) {
-                    const m = link.href.match(/(?:videos|watch\/?\?v=|reel\/)(\d+)/);
+                    const m = link.href.match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=)(\d+)/);
                     if (m) { videoId = m[1]; break; }
                 }
                 current = current.parentElement;
             }
 
             if (!videoId) {
-                const urlMatch = window.location.href.match(/(?:videos|watch\/?\?v=|reel\/)(\d+)/);
+                const urlMatch = window.location.href.match(/(?:videos\/|watch\/?\?v=|reel\/)(\d+)/);
                 if (urlMatch) videoId = urlMatch[1];
             }
 
             const scripts = document.querySelectorAll('script[type="application/json"], script:not([src])');
 
-            // Pass 1: Scan scripts containing the videoId
+            // Pass 1: Scan scripts containing the specific videoId
             if (videoId) {
                 for (const s of scripts) {
                     const text = s.textContent;
@@ -833,12 +833,19 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 }
             }
 
-            // Pass 2: Scan scripts with high-confidence playable keys
-            for (const s of scripts) {
-                const text = s.textContent;
-                if (text && (text.includes('playable_url_quality_hd') || text.includes('browser_native_hd_url') || text.includes('progressive_download_url') || text.includes('playable_url'))) {
-                    const found = parseScriptText(text);
-                    if (found) return found;
+            // Pass 2: Strictly limit global script scanning to dedicated single-video views
+            // (prevents multi-video feeds from ever reusing the first post's video script)
+            const isSingleVideoView = window.location.pathname.includes('/watch') ||
+                                      window.location.pathname.includes('/reel') ||
+                                      window.location.pathname.includes('/videos/') ||
+                                      (this.hasActiveModal && this.hasActiveModal());
+            if (isSingleVideoView) {
+                for (const s of scripts) {
+                    const text = s.textContent;
+                    if (text && (text.includes('playable_url_quality_hd') || text.includes('browser_native_hd_url') || text.includes('progressive_download_url') || text.includes('playable_url'))) {
+                        const found = parseScriptText(text);
+                        if (found) return found;
+                    }
                 }
             }
 

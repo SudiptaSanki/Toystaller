@@ -153,7 +153,7 @@
     };
 
     function searchObjForVideoUrl(obj, seen = new Set(), depth = 0, isVideoContext = true) {
-        if (depth > 12 || !obj || typeof obj !== 'object') return null;
+        if (depth > 20 || !obj || typeof obj !== 'object') return null;
         if (seen.has(obj)) return null;
         seen.add(obj);
 
@@ -197,7 +197,7 @@
     }
 
     function searchObjForAudioUrl(obj, seen = new Set(), depth = 0) {
-        if (depth > 12 || !obj || typeof obj !== 'object') return null;
+        if (depth > 20 || !obj || typeof obj !== 'object') return null;
         if (seen.has(obj)) return null;
         seen.add(obj);
 
@@ -230,15 +230,12 @@
     }
 
     function extractVideoUrlFromReact(el, isVideoContext = true) {
+        if (!el) return null;
         let current = el;
         const platform = getPlatform();
 
-        if (platform.extractVideoUrlFromDOM) {
-            const domUrl = platform.extractVideoUrlFromDOM(el);
-            if (domUrl) return domUrl;
-        }
-
-        for (let i = 0; i < 12 && current; i++) {
+        // 1. Prioritize React Fiber inspection directly on the clicked media element & its parent tree
+        for (let i = 0; i < 20 && current; i++) {
             const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
                 k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
             if (key && current[key]) {
@@ -248,15 +245,22 @@
             current = current.parentElement;
         }
 
+        // 2. Fallback to DOM / Relay script extraction for the specific video
+        if (platform.extractVideoUrlFromDOM) {
+            const domUrl = platform.extractVideoUrlFromDOM(el);
+            if (domUrl) return domUrl;
+        }
+
         return null;
     }
 
     function extractAudioUrlFromReact(el) {
+        if (!el) return null;
         let current = el;
         const platform = getPlatform();
         if (!platform.extractPriorityAudioUrl && !platform.isValidAudio) return null;
 
-        for (let i = 0; i < 12 && current; i++) {
+        for (let i = 0; i < 20 && current; i++) {
             const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
                 k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
             if (key && current[key]) {

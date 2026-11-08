@@ -31,50 +31,27 @@
     let isHls = false;
     let hlsInstance = null;
 
-    // Platform theme & badge setup
+    // Platform theme & badge setup (Global Player)
     function setupBranding(detectedPlatform) {
+        document.title = 'Toystaller - Media Player';
+        if (brandBadge) {
+            brandBadge.textContent = 'Global Player';
+            brandBadge.style.background = '#4facfe';
+            brandBadge.style.color = '#fff';
+        }
+
         const p = (detectedPlatform || platformParam || '').toLowerCase();
         if (p.includes('linkedin') || (activeDownloadUrl && activeDownloadUrl.includes('licdn.com'))) {
-            document.title = 'Toystaller - LinkedIn Video Player';
-            if (brandBadge) {
-                brandBadge.textContent = 'LinkedIn Edition';
-                brandBadge.style.background = '#0a66c2';
-                brandBadge.style.color = '#fff';
-            }
             if (dlBtn) dlBtn.style.background = '#0a66c2';
         } else if (p.includes('facebook') || (activeDownloadUrl && (activeDownloadUrl.includes('fbcdn.net') || activeDownloadUrl.includes('fbsbx.com')))) {
-            document.title = 'Toystaller - Facebook Video Player';
-            if (brandBadge) {
-                brandBadge.textContent = 'Facebook Edition';
-                brandBadge.style.background = '#1877f2';
-                brandBadge.style.color = '#fff';
-            }
             if (dlBtn) dlBtn.style.background = '#1877f2';
         } else if (p.includes('whatsapp') || (activeDownloadUrl && (activeDownloadUrl.includes('whatsapp.net') || activeDownloadUrl.includes('whatsapp.com')))) {
-            document.title = 'Toystaller - WhatsApp Media Viewer';
-            if (brandBadge) {
-                brandBadge.textContent = 'WhatsApp Edition';
-                brandBadge.style.background = '#25D366';
-                brandBadge.style.color = '#111b21';
-            }
             if (dlBtn) {
                 dlBtn.style.background = '#25D366';
                 dlBtn.style.color = '#111b21';
             }
         } else if (p.includes('instagram') || (activeDownloadUrl && activeDownloadUrl.includes('cdninstagram.com'))) {
-            document.title = 'Toystaller - Instagram Media Viewer';
-            if (brandBadge) {
-                brandBadge.textContent = 'Instagram Edition';
-                brandBadge.style.background = 'linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888)';
-                brandBadge.style.color = '#fff';
-            }
-        } else {
-            document.title = 'Toystaller - Media Player';
-            if (brandBadge) {
-                brandBadge.textContent = 'Global Player';
-                brandBadge.style.background = '#4facfe';
-                brandBadge.style.color = '#fff';
-            }
+            if (dlBtn) dlBtn.style.background = 'linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888)';
         }
     }
 
