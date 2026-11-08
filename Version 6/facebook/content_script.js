@@ -496,10 +496,14 @@ function injectDownloadButtons() {
                     e.preventDefault();
                     e.stopPropagation();
                     const host = window.location.hostname.toLowerCase();
+                    const platform = PlatformManager.getPlatform();
+                    const pName = platform.name || '';
+
                     if (isVideo) {
+                        // 1. Direct poster attribute
                         let poster = media.getAttribute('poster');
                         
-                        // Fallback 1: Look for a nearby image tag (very common in Instagram/Facebook custom players)
+                        // 2. Look for nearby image tag
                         if (!poster) {
                             let current = media;
                             for (let i = 0; i < 4 && current && !poster; i++) {
@@ -511,68 +515,61 @@ function injectDownloadButtons() {
                             }
                         }
 
-                        // Fallback 2: LinkedIn specific network interception
+                        // 3. Instant canvas frame capture directly from the active HTML5 video element
                         if (!poster) {
-                            if (host.includes('linkedin.com')) {
-                                if (pageInterceptedVideoUrls.size > 0) {
-                                    const covers = Array.from(pageInterceptedVideoUrls).filter(u => u.includes('videocover'));
-                                    if (covers.length > 0) poster = covers[0];
+                            try {
+                                if (media.readyState >= 2 || (media.videoWidth && media.videoHeight)) {
+                                    const w = media.videoWidth || media.clientWidth || 640;
+                                    const h = media.videoHeight || media.clientHeight || 360;
+                                    const cvs = document.createElement('canvas');
+                                    cvs.width = w;
+                                    cvs.height = h;
+                                    const ctx = cvs.getContext('2d');
+                                    ctx.drawImage(media, 0, 0, w, h);
+                                    const captured = cvs.toDataURL('image/jpeg', 0.95);
+                                    if (captured && captured.length > 100) {
+                                        poster = captured;
+                                    }
                                 }
-                                
-                                if (!poster) {
-                                    safeSendMessage({ action: 'getMediaUrls', mediaType: 'img' }, (response) => {
-                                        if (response && response.urls && response.urls.length > 0) {
-                                            const covers = response.urls.filter(u => u.includes('videocover'));
-                                            if (covers.length > 0) {
-                                                safeSendMessage({ action: 'openInNewTab', url: covers[0], isVideo: false, platform: 'LinkedIn' });
-                                                return;
-                                            }
-                                        }
-                                        alert('No thumbnail image available for this video.');
-                                    });
-                                    return;
-                                }
-                            }
+                            } catch (err) {}
                         }
 
-                        // Fallback 3: Use React Fiber extraction for images (common on Instagram and Facebook)
-                        if (!poster && (host.includes('instagram.com') || host.includes('facebook.com'))) {
-                            const magicId = Math.random().toString(36).substring(2, 15);
-                            media.setAttribute('data-magic-id', magicId);
-                            let resolved = false;
-                            const handler = (e) => {
-                                if (!e.data || e.data.type !== 'magic_response_react_url_' + magicId) return;
-                                if (resolved) return;
-                                resolved = true;
-                                window.removeEventListener('message', handler);
-                                if (e.data.url) {
-                                    const pName = host.includes('facebook.com') ? 'Facebook' : 'Instagram';
-                                    safeSendMessage({ action: 'openInNewTab', url: e.data.url, isVideo: false, platform: pName });
-                                } else {
-                                    alert('No thumbnail image available for this video.');
-                                }
-                            };
-                            window.addEventListener('message', handler);
-                            window.postMessage({ type: 'magic_get_react_url', id: magicId, isVideo: false }, '*');
-                            
-                            setTimeout(() => {
-                                if (resolved) return;
-                                resolved = true;
-                                window.removeEventListener('message', handler);
-                                alert('No thumbnail image available for this video.');
-                            }, 500);
-                            return; // exit early because it's async
-                        }
-
-                        const pName = PlatformManager.getPlatform().name || '';
                         if (poster) {
                             safeSendMessage({ action: 'openInNewTab', url: poster, isVideo: false, platform: pName });
-                        } else {
-                            alert('No thumbnail image available for this video.');
+                            return;
                         }
+
+                        // 4. Try React Fiber extraction for image
+                        const magicId = Math.random().toString(36).substring(2, 15);
+                        media.setAttribute('data-magic-id', magicId);
+                        let resolved = false;
+                        const handler = (e) => {
+                            if (!e.data || e.data.type !== 'magic_response_react_url_' + magicId) return;
+                            if (resolved) return;
+                            resolved = true;
+                            window.removeEventListener('message', handler);
+                            if (e.data.url) {
+                                safeSendMessage({ action: 'openInNewTab', url: e.data.url, isVideo: false, platform: pName });
+                            } else {
+                                alert('No thumbnail image available for this video.');
+                            }
+                        };
+                        window.addEventListener('message', handler);
+                        window.postMessage({ type: 'magic_get_react_url', id: magicId, isVideo: false }, '*');
+                        
+                        setTimeout(() => {
+                            if (resolved) return;
+                            resolved = true;
+                            window.removeEventListener('message', handler);
+                            alert('No thumbnail image available for this video.');
+                        }, 400);
                     } else {
-                        const pName = PlatformManager.getPlatform().name || '';
-                        safeSendMessage({ action: 'openInNewTab', url: getHighResImageUrl(), isVideo: false, platform: pName });
+                        const highRes = getHighResImageUrl() || media.currentSrc || media.src;
+                        if (highRes) {
+                            safeSendMessage({ action: 'openInNewTab', url: highRes, isVideo: false, platform: pName });
+                        } else {
+                            alert('Could not find image URL.');
+                        }
                     }
                 });
                 buttons.push(imgBtn);
@@ -620,20 +617,6 @@ function injectDownloadButtons() {
                             }
                             callback(e.data.url, resolvedAudio, mutedUrl);
                         } else {
-                            if (window.location.hostname.includes('facebook.com') && isVideo) {
-                                // Fallback for Facebook: ONLY attempt mobile site extraction if we have a specific video permalink
-                                const postUrl = findPostPermalink(media);
-                                if (postUrl) {
-                                    safeSendMessage({ action: 'fetchMobileFacebookVideo', url: postUrl }, (response) => {
-                                        if (response && response.url) {
-                                            callback(response.url, null, null);
-                                        } else {
-                                            getMediaUrlFallback(callback, silent);
-                                        }
-                                    });
-                                    return;
-                                }
-                            }
                             getMediaUrlFallback(callback, silent);
                         }
                     };
@@ -646,7 +629,7 @@ function injectDownloadButtons() {
                         resolved = true;
                         window.removeEventListener('message', handler);
                         getMediaUrlFallback(callback, silent);
-                    }, 800);
+                    }, 400);
                     return;
                 }
 

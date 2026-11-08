@@ -160,8 +160,20 @@
         return originalXHRSend.apply(this, args);
     };
 
+    const SKIP_KEYS = new Set([
+        'return', 'sibling', 'child', 'alternate', 'stateNode',
+        '_owner', 'parent', 'parentElement', 'document', 'window'
+    ]);
+
+    function isSafeObject(obj) {
+        if (!obj || typeof obj !== 'object') return false;
+        if (typeof Node !== 'undefined' && obj instanceof Node) return false;
+        if (obj.nodeType || obj === window || obj === document) return false;
+        return true;
+    }
+
     function searchObjForVideoUrl(obj, seen = new Set(), depth = 0, isVideoContext = true) {
-        if (depth > 20 || !obj || typeof obj !== 'object') return null;
+        if (depth > 8 || !isSafeObject(obj)) return null;
         if (seen.has(obj)) return null;
         seen.add(obj);
 
@@ -180,7 +192,7 @@
             }
         } else {
             for (let key of Object.keys(obj)) {
-                if (key === 'return' || key === 'sibling' || key === '_owner' || key === 'parent') continue;
+                if (SKIP_KEYS.has(key)) continue;
 
                 const val = obj[key];
                 if (typeof val === 'string') {
@@ -197,7 +209,7 @@
                             return val;
                         }
                     }
-                } else if (typeof val === 'object') {
+                } else if (typeof val === 'object' && val !== null) {
                     const nested = searchObjForVideoUrl(val, seen, depth + 1, isVideoContext);
                     if (nested) return nested;
                 }
@@ -207,7 +219,7 @@
     }
 
     function searchObjForAudioUrl(obj, seen = new Set(), depth = 0) {
-        if (depth > 20 || !obj || typeof obj !== 'object') return null;
+        if (depth > 8 || !isSafeObject(obj)) return null;
         if (seen.has(obj)) return null;
         seen.add(obj);
 
@@ -224,7 +236,7 @@
                 if (found) return found;
             }
             for (let key of Object.keys(obj)) {
-                if (key === 'return' || key === 'sibling' || key === '_owner' || key === 'parent') continue;
+                if (SKIP_KEYS.has(key)) continue;
                 const val = obj[key];
                 if (typeof val === 'string') {
                     if (platform.isValidAudio && platform.isValidAudio(val)) {
@@ -240,7 +252,7 @@
     }
 
     function searchObjForDashVideoUrl(obj, seen = new Set(), depth = 0) {
-        if (depth > 20 || !obj || typeof obj !== 'object') return null;
+        if (depth > 8 || !isSafeObject(obj)) return null;
         if (seen.has(obj)) return null;
         seen.add(obj);
 
@@ -257,7 +269,7 @@
                 if (found) return found;
             }
             for (let key of Object.keys(obj)) {
-                if (key === 'return' || key === 'sibling' || key === '_owner' || key === 'parent') continue;
+                if (SKIP_KEYS.has(key)) continue;
                 const val = obj[key];
                 if (typeof val === 'string') {
                     if (platform.isValidDashVideo && platform.isValidDashVideo(val)) {
@@ -274,81 +286,89 @@
 
     function extractMediaBundle(el, isVideoContext = true) {
         if (!el) return { url: null, audioUrl: null, mutedUrl: null };
-        const platform = getPlatform();
+        try {
+            const platform = getPlatform();
 
-        // Pass 1: Try React Fiber for PROGRESSIVE videos (complete with audio)
-        let progressiveUrl = null;
-        let current = el;
-        for (let i = 0; i < 14 && current; i++) {
-            const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
-                k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-            if (key && current[key]) {
-                const found = searchObjForVideoUrl(current[key], new Set(), 0, isVideoContext);
-                if (found && !found.toLowerCase().includes('stream_type=dash')) {
-                    progressiveUrl = found;
-                    break;
+            // Pass 1: Try React Fiber for PROGRESSIVE videos (complete with audio)
+            let progressiveUrl = null;
+            let current = el;
+            for (let i = 0; i < 14 && current; i++) {
+                const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
+                    k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                if (key && current[key]) {
+                    const targetObj = current[key].memoizedProps || current[key];
+                    const found = searchObjForVideoUrl(targetObj, new Set(), 0, isVideoContext);
+                    if (found && !found.toLowerCase().includes('stream_type=dash')) {
+                        progressiveUrl = found;
+                        break;
+                    }
+                }
+                current = current.parentElement;
+            }
+
+            // Pass 2: Check DOM scripts for progressive videos matching videoId
+            if (!progressiveUrl && platform.extractVideoUrlFromDOM) {
+                const domUrl = platform.extractVideoUrlFromDOM(el);
+                if (domUrl && !domUrl.toLowerCase().includes('stream_type=dash')) {
+                    progressiveUrl = domUrl;
                 }
             }
-            current = current.parentElement;
-        }
 
-        // Pass 2: Check DOM scripts for progressive videos matching videoId
-        if (!progressiveUrl && platform.extractVideoUrlFromDOM) {
-            const domUrl = platform.extractVideoUrlFromDOM(el);
-            if (domUrl && !domUrl.toLowerCase().includes('stream_type=dash')) {
-                progressiveUrl = domUrl;
-            }
-        }
-
-        // Pass 3: Audio URL extraction
-        let audioUrl = null;
-        current = el;
-        for (let i = 0; i < 14 && current; i++) {
-            const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
-                k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-            if (key && current[key]) {
-                const foundAudio = searchObjForAudioUrl(current[key], new Set(), 0);
-                if (foundAudio) {
-                    audioUrl = foundAudio;
-                    break;
+            // Pass 3: Audio URL extraction
+            let audioUrl = null;
+            current = el;
+            for (let i = 0; i < 14 && current; i++) {
+                const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
+                    k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                if (key && current[key]) {
+                    const targetObj = current[key].memoizedProps || current[key];
+                    const foundAudio = searchObjForAudioUrl(targetObj, new Set(), 0);
+                    if (foundAudio) {
+                        audioUrl = foundAudio;
+                        break;
+                    }
                 }
+                current = current.parentElement;
             }
-            current = current.parentElement;
-        }
-        if (!audioUrl && platform.extractAudioUrlFromDOM) {
-            audioUrl = platform.extractAudioUrlFromDOM(el);
-        }
+            if (!audioUrl && platform.extractAudioUrlFromDOM) {
+                audioUrl = platform.extractAudioUrlFromDOM(el);
+            }
 
-        // Pass 4: DASH / Muted Video URL extraction
-        let dashVideoUrl = null;
-        current = el;
-        for (let i = 0; i < 14 && current; i++) {
-            const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
-                k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-            if (key && current[key]) {
-                const foundDash = searchObjForDashVideoUrl(current[key], new Set(), 0);
-                if (foundDash) {
-                    dashVideoUrl = foundDash;
-                    break;
+            // Pass 4: DASH / Muted Video URL extraction
+            let dashVideoUrl = null;
+            current = el;
+            for (let i = 0; i < 14 && current; i++) {
+                const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
+                    k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                if (key && current[key]) {
+                    const targetObj = current[key].memoizedProps || current[key];
+                    const foundDash = searchObjForDashVideoUrl(targetObj, new Set(), 0);
+                    if (foundDash) {
+                        dashVideoUrl = foundDash;
+                        break;
+                    }
                 }
+                current = current.parentElement;
             }
-            current = current.parentElement;
-        }
-        if (!dashVideoUrl && platform.extractDashVideoFromDOM) {
-            dashVideoUrl = platform.extractDashVideoFromDOM(el);
-        }
+            if (!dashVideoUrl && platform.extractDashVideoFromDOM) {
+                dashVideoUrl = platform.extractDashVideoFromDOM(el);
+            }
 
-        // Resolution:
-        // 1. If progressiveUrl exists: it is the master video with audio!
-        // 2. If progressiveUrl does not exist (e.g. 2-hour long video): fall back to dashVideoUrl!
-        const finalUrl = progressiveUrl || dashVideoUrl;
-        const finalMuted = dashVideoUrl || null;
+            // Resolution:
+            // 1. If progressiveUrl exists: it is the master video with audio!
+            // 2. If progressiveUrl does not exist (e.g. 2-hour long video): fall back to dashVideoUrl!
+            const finalUrl = progressiveUrl || dashVideoUrl;
+            const finalMuted = dashVideoUrl || null;
 
-        return {
-            url: finalUrl,
-            audioUrl: audioUrl,
-            mutedUrl: finalMuted
-        };
+            return {
+                url: finalUrl,
+                audioUrl: audioUrl,
+                mutedUrl: finalMuted
+            };
+        } catch (err) {
+            console.warn('Toystaller: extractMediaBundle error:', err);
+            return { url: null, audioUrl: null, mutedUrl: null };
+        }
     }
 
     function extractVideoUrlFromReact(el, isVideoContext = true) {
@@ -364,26 +384,38 @@
     // Facebook-specific: Parse relay data from <script> tags to find progressive video URLs
 
     window.addEventListener('message', (e) => {
-        if (!e.data || e.data.type !== 'magic_get_react_url' || !e.data.id) return;
-        const id = e.data.id;
-        const isVideo = e.data.isVideo !== undefined ? e.data.isVideo : true;
-        const el = document.querySelector(`[data-magic-id="${id}"]`);
+        try {
+            if (!e.data || e.data.type !== 'magic_get_react_url' || !e.data.id) return;
+            const id = e.data.id;
+            const isVideo = e.data.isVideo !== undefined ? e.data.isVideo : true;
+            const el = document.querySelector(`[data-magic-id="${id}"]`);
 
-        let result = { url: null, audioUrl: null, mutedUrl: null };
-        if (el) {
-            if (isVideo) {
-                result = extractMediaBundle(el, true);
-            } else {
-                result.url = extractVideoUrlFromReact(el, false);
+            let result = { url: null, audioUrl: null, mutedUrl: null };
+            if (el) {
+                if (isVideo) {
+                    result = extractMediaBundle(el, true);
+                } else {
+                    result.url = extractVideoUrlFromReact(el, false);
+                }
+            }
+
+            window.postMessage({
+                type: 'magic_response_react_url_' + id,
+                url: result.url,
+                audioUrl: result.audioUrl,
+                mutedUrl: result.mutedUrl
+            }, '*');
+        } catch (err) {
+            console.warn('Toystaller: window message handler error:', err);
+            if (e && e.data && e.data.id) {
+                window.postMessage({
+                    type: 'magic_response_react_url_' + e.data.id,
+                    url: null,
+                    audioUrl: null,
+                    mutedUrl: null
+                }, '*');
             }
         }
-
-        window.postMessage({
-            type: 'magic_response_react_url_' + id,
-            url: result.url,
-            audioUrl: result.audioUrl,
-            mutedUrl: result.mutedUrl
-        }, '*');
     });
 
 })();

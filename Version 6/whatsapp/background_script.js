@@ -198,7 +198,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // Only use player.html for videos that actually require header spoofing/in-browser decoding (anti-hotlink CDNs, HLS).
         // For ALL images (Amazon, Pexels, Unsplash, Google, etc.) and regular website videos,
         // directly pop out the raw URL in the new tab. This avoids cross-origin embedding blocks (CORS/CORP) and guarantees 100% display!
-        const shouldUsePlayer = isVideo && (isSpecialVideoPlatform || isHlsStream || request.forcePlayer);
+        const isDataUrl = lowerUrl.startsWith('data:');
+        const shouldUsePlayer = (isVideo && (isSpecialVideoPlatform || isHlsStream || request.forcePlayer)) || isDataUrl;
 
         let playerUrl = chrome.runtime.getURL('player.html') + 
             '?url=' + encodeURIComponent(url) + 
