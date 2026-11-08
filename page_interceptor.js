@@ -29,6 +29,20 @@
         return platforms['generic'] || {};
     };
 
+    function cleanVideoUrl(url) {
+        if (!url || typeof url !== 'string') return null;
+        let clean = url;
+        clean = clean.replace(/\\\//g, '/');
+        clean = clean.replace(/&amp;/g, '&')
+                     .replace(/\\u0026/g, '&')
+                     .replace(/\u0026/g, '&')
+                     .replace(/\\u002526/g, '&');
+        clean = clean.replace(/([?&])bytestart=\d+&?/g, '$1')
+                     .replace(/([?&])byteend=\d+&?/g, '$1');
+        clean = clean.replace(/[?&]$/, '');
+        return clean.trim().replace(/^["']|["']$/g, '');
+    }
+
     function isValidVideo(url) {
         return getPlatform().isValidVideo ? getPlatform().isValidVideo(url) : true;
     }
@@ -314,9 +328,12 @@
                         const foundDash = platform.extractDashVideoFromReact(fiber.memoizedProps);
                         if (foundDash) dashVideoUrl = foundDash;
                     }
-                    if (!audioUrl && platform.extractAudioUrlFromReact) {
-                        const foundAudio = platform.extractAudioUrlFromReact(fiber.memoizedProps);
-                        if (foundAudio) audioUrl = foundAudio;
+                    if (!audioUrl) {
+                        const audioExtractor = platform.extractAudioUrlFromReact || platform.extractPriorityAudioUrl;
+                        if (audioExtractor) {
+                            const foundAudio = audioExtractor.call(platform, fiber.memoizedProps);
+                            if (foundAudio) audioUrl = foundAudio;
+                        }
                     }
                 }
 
@@ -325,6 +342,17 @@
                         const found = searchObjForVideoUrl(fiber.memoizedState, new Set(), 0, isVideoContext);
                         if (found && !found.toLowerCase().includes('stream_type=dash')) {
                             progressiveUrl = found;
+                        }
+                    }
+                    if (!dashVideoUrl && platform.extractDashVideoFromReact) {
+                        const foundDash = platform.extractDashVideoFromReact(fiber.memoizedState);
+                        if (foundDash) dashVideoUrl = foundDash;
+                    }
+                    if (!audioUrl) {
+                        const audioExtractor = platform.extractAudioUrlFromReact || platform.extractPriorityAudioUrl;
+                        if (audioExtractor) {
+                            const foundAudio = audioExtractor.call(platform, fiber.memoizedState);
+                            if (foundAudio) audioUrl = foundAudio;
                         }
                     }
                 }
@@ -344,6 +372,13 @@
                         if (found && !found.toLowerCase().includes('stream_type=dash')) {
                             progressiveUrl = found;
                             break;
+                        }
+                        if (!audioUrl) {
+                            const audioExtractor = platform.extractAudioUrlFromReact || platform.extractPriorityAudioUrl;
+                            if (audioExtractor) {
+                                const foundAudio = audioExtractor.call(platform, current[propsKey]);
+                                if (foundAudio) audioUrl = foundAudio;
+                            }
                         }
                     }
                     // Stop at post container boundary to NEVER bleed into adjacent posts on the feed

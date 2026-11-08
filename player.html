@@ -24,28 +24,30 @@
       top: 0;
       left: 0;
       right: 0;
-      height: 56px;
-      background: rgba(18, 19, 23, 0.88);
+      min-height: 56px;
+      background: rgba(18, 19, 23, 0.92);
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 24px;
+      padding: 6px 18px;
       z-index: 100;
       border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      flex-wrap: wrap;
+      gap: 10px;
     }
     .brand {
       display: flex;
       align-items: center;
       gap: 10px;
       font-weight: 700;
-      font-size: 16px;
+      font-size: 15px;
       color: #fff;
     }
     .brand-logo {
-      width: 26px;
-      height: 26px;
+      width: 24px;
+      height: 24px;
       border-radius: 5px;
       object-fit: cover;
     }
@@ -54,7 +56,7 @@
       color: #fff;
       font-size: 11px;
       font-weight: 700;
-      padding: 2px 8px;
+      padding: 2px 7px;
       border-radius: 4px;
       text-transform: uppercase;
       letter-spacing: 0.5px;
@@ -63,20 +65,22 @@
     .actions {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 7px;
+      flex-wrap: wrap;
     }
     .btn {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      padding: 8px 16px;
-      border-radius: 7px;
-      font-size: 13px;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
       font-weight: 600;
       cursor: pointer;
       border: none;
       transition: all 0.15s ease;
       text-decoration: none;
+      white-space: nowrap;
     }
     .btn-primary {
       background: #1877f2;

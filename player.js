@@ -176,12 +176,11 @@
         if (dlAudioBtn) dlAudioBtn.style.display = 'inline-flex';
         if (copyAudioBtn) copyAudioBtn.style.display = 'inline-flex';
 
-        const isSeparateVideoStream = activeAudioUrl && (
-            !activeDownloadUrl ||
+        const isSeparateVideoStream = activeAudioUrl && activeDownloadUrl && (
             activeDownloadUrl.includes('stream_type=dash') ||
             activeDownloadUrl.includes('/o1/v/') ||
-            activeMutedUrl ||
-            (platformParam && platformParam.toLowerCase() === 'facebook')
+            activeDownloadUrl.includes('mime=video') ||
+            activeMutedUrl === activeDownloadUrl
         );
 
         if (audioPlayer) {
@@ -269,29 +268,22 @@
             if (shortcutsText) shortcutsText.style.display = 'inline-flex';
             
             const isDash = sourceUrl && sourceUrl.includes('stream_type=dash');
+            const isSeparate = activeAudioUrl && (isDash || sourceUrl.includes('/o1/v/') || activeMutedUrl === sourceUrl);
             if (formatText) {
-                if (isDash && activeAudioUrl) {
+                if (isSeparate) {
                     formatText.textContent = 'Direct DASH Stream (Synced Audio + Video)';
-                } else if (activeAudioUrl) {
-                    formatText.textContent = 'Direct Master Audio + Video';
                 } else {
-                    formatText.textContent = 'Direct Master Media';
+                    formatText.textContent = 'Direct Master Audio + Video';
                 }
             }
 
-            if (activeAudioUrl) {
-                if (dlAudioBtn) dlAudioBtn.style.display = 'inline-flex';
-                if (copyAudioBtn) copyAudioBtn.style.display = 'inline-flex';
-            }
+            // Always display Audio options for video mode (empowers editors and users to extract/copy audio)
+            if (dlAudioBtn) dlAudioBtn.style.display = 'inline-flex';
+            if (copyAudioBtn) copyAudioBtn.style.display = 'inline-flex';
 
-            const effectiveMuted = activeMutedUrl || (activeAudioUrl ? sourceUrl : (isDash ? sourceUrl : null));
-            if (effectiveMuted) {
-                if (dlMutedBtn) dlMutedBtn.style.display = 'inline-flex';
-                if (copyMutedBtn) copyMutedBtn.style.display = 'inline-flex';
-            } else {
-                if (dlMutedBtn) dlMutedBtn.style.display = 'none';
-                if (copyMutedBtn) copyMutedBtn.style.display = 'none';
-            }
+            // Always display Muted/Video stream options for video mode
+            if (dlMutedBtn) dlMutedBtn.style.display = 'inline-flex';
+            if (copyMutedBtn) copyMutedBtn.style.display = 'inline-flex';
 
             dlBtn.innerHTML = `
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
@@ -346,7 +338,16 @@
                 });
             } else {
                 videoPlayer.src = cleanUrl;
-                videoPlayer.play().catch(() => {});
+                videoPlayer.play().catch(() => {
+                    videoPlayer.muted = true;
+                    videoPlayer.play().catch(() => {});
+                });
+
+                window.addEventListener('click', () => {
+                    if (videoPlayer && videoPlayer.muted && isVideoMode) {
+                        videoPlayer.muted = false;
+                    }
+                }, { once: true });
 
                 videoPlayer.addEventListener('loadedmetadata', () => {
                     if (videoPlayer.videoWidth && videoPlayer.videoHeight) {
@@ -485,7 +486,7 @@
     // Copy Muted Video Link handler
     if (copyMutedBtn) {
         copyMutedBtn.addEventListener('click', () => {
-            const targetMuted = activeMutedUrl || (activeDownloadUrl && activeDownloadUrl.includes('stream_type=dash') ? activeDownloadUrl : null);
+            const targetMuted = activeMutedUrl || activeDownloadUrl;
             if (!targetMuted) return;
             navigator.clipboard.writeText(targetMuted).then(() => {
                 copyMutedBtn.textContent = 'Muted Copied!';
@@ -502,7 +503,7 @@
     // Download Muted Video handler
     if (dlMutedBtn) {
         dlMutedBtn.addEventListener('click', () => {
-            const targetMuted = activeMutedUrl || (activeDownloadUrl && activeDownloadUrl.includes('stream_type=dash') ? activeDownloadUrl : null);
+            const targetMuted = activeMutedUrl || activeDownloadUrl;
             if (!targetMuted) return;
             const ext = 'mp4';
             const base = (platformParam || 'Toystaller').replace(/[^a-zA-Z0-9]/g, '_');

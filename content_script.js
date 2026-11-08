@@ -614,9 +614,12 @@ function injectDownloadButtons() {
                     }
 
                     // Step 2: Try React Fiber extraction via page_interceptor (for Facebook, Instagram)
+                    const reqId = 'req_' + Math.random().toString(36).substring(2, 12);
+                    media.setAttribute('data-magic-id', reqId);
+
                     let resolved = false;
                     const handler = (e) => {
-                        if (!e.data || e.data.type !== 'magic_response_react_url_' + magicId) return;
+                        if (!e.data || e.data.type !== 'magic_response_react_url_' + reqId) return;
                         if (resolved) return;
                         resolved = true;
                         window.removeEventListener('message', handler);
@@ -628,9 +631,8 @@ function injectDownloadButtons() {
                             getMediaUrlFallback(callback, silent);
                         }
                     };
-                    media.setAttribute('data-magic-id', magicId);
                     window.addEventListener('message', handler);
-                    window.postMessage({ type: 'magic_get_react_url', id: magicId, isVideo: isVideo }, '*');
+                    window.postMessage({ type: 'magic_get_react_url', id: reqId, isVideo: isVideo }, '*');
 
                     setTimeout(() => {
                         if (resolved) return;
@@ -694,8 +696,8 @@ function injectDownloadButtons() {
                             matchedVideos = platformVideos.filter(u => u.includes(idMatch[1]));
                         }
 
-                        // ONLY use candidates matched by post/video ID for social platforms
-                        const candidateVideos = matchedVideos.length > 0 ? matchedVideos : (platform.name === 'generic' ? platformVideos.slice(-5) : []);
+                        // Use matched candidate if found; otherwise take the most recent candidates
+                        const candidateVideos = matchedVideos.length > 0 ? matchedVideos : platformVideos.slice(-5);
                         if (candidateVideos.length > 0) {
                             const best = pickBestVideoUrl(candidateVideos);
                             if (best) {
@@ -712,7 +714,7 @@ function injectDownloadButtons() {
                     }
                 }
 
-                // 4. Fallback to background script webRequest (strictly ID-scoped on social platforms)
+                // 4. Fallback to background script webRequest
                 const mediaType = isVideo ? 'video' : 'img';
                 safeSendMessage({ action: 'getMediaUrls', mediaType: mediaType }, (response) => {
                     if (response && response.urls && response.urls.length > 0) {
@@ -727,8 +729,8 @@ function injectDownloadButtons() {
                             matched = candidates.filter(u => u.includes(idMatch[1]));
                         }
 
-                        // Use matched candidate if found; NEVER pick a random candidate on social platforms
-                        const finalCandidates = matched.length > 0 ? matched : (platform.name === 'generic' ? candidates.slice(-5) : []);
+                        // Use matched candidate if found; otherwise take the most recent candidates
+                        const finalCandidates = matched.length > 0 ? matched : candidates.slice(-5);
                         if (finalCandidates.length > 0) {
                             const best = pickBestVideoUrl(finalCandidates);
                             if (best) {

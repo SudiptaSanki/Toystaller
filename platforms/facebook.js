@@ -729,6 +729,10 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             return null;
         },
 
+        extractAudioUrlFromReact(val) {
+            return this.extractPriorityAudioUrl(val);
+        },
+
         extractPriorityAudioUrl(val) {
             if (!val || typeof val !== 'object') return null;
             const audioCandidates = [
