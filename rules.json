@@ -76,12 +76,16 @@
           "header": "Referer",
           "operation": "set",
           "value": "https://www.linkedin.com/"
+        },
+        {
+          "header": "Origin",
+          "operation": "set",
+          "value": "https://www.linkedin.com"
         }
       ]
     },
     "condition": {
       "urlFilter": "||licdn.com",
-      "excludedInitiatorDomains": ["linkedin.com"],
       "resourceTypes": [
         "main_frame",
         "sub_frame",

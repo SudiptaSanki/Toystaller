@@ -28,13 +28,52 @@
   },
   "content_scripts": [
     {
+      "matches": ["*://*.facebook.com/*"],
+      "js": [
+        "specialized/facebook/platforms/facebook.js",
+        "specialized/facebook/overlay_manager.js",
+        "specialized/facebook/content_script.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["*://*.linkedin.com/*"],
+      "js": [
+        "specialized/linkedin/platforms/linkedin.js",
+        "specialized/linkedin/overlay_manager.js",
+        "specialized/linkedin/content_script.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["*://*.instagram.com/*"],
+      "js": [
+        "specialized/instagram/platforms/instagram.js",
+        "specialized/instagram/overlay_manager.js",
+        "specialized/instagram/content_script.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["*://web.whatsapp.com/*"],
+      "js": [
+        "specialized/whatsapp/platforms/whatsapp.js",
+        "specialized/whatsapp/core/overlay_manager.js",
+        "specialized/whatsapp/core/content_core.js",
+        "specialized/whatsapp/content_script.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
       "matches": ["<all_urls>"],
+      "exclude_matches": [
+        "*://*.facebook.com/*",
+        "*://*.linkedin.com/*",
+        "*://*.instagram.com/*",
+        "*://web.whatsapp.com/*"
+      ],
       "js": [
         "platforms/generic.js",
-        "platforms/instagram.js",
-        "platforms/facebook.js",
-        "platforms/linkedin.js",
-        "platforms/whatsapp.js",
         "overlay_manager.js",
         "content_script.js"
       ],
@@ -53,12 +92,16 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "specialized/linkedin/platforms/linkedin.js",
+        "specialized/linkedin/page_interceptor.js",
+        "specialized/facebook/platforms/facebook.js",
+        "specialized/facebook/page_interceptor.js",
+        "specialized/instagram/platforms/instagram.js",
+        "specialized/instagram/page_interceptor.js",
+        "specialized/whatsapp/platforms/whatsapp.js",
+        "specialized/whatsapp/page_interceptor.js",
         "page_interceptor.js",
         "platforms/generic.js",
-        "platforms/instagram.js",
-        "platforms/facebook.js",
-        "platforms/linkedin.js",
-        "platforms/whatsapp.js",
         "player.html",
         "player.js",
         "hls.min.js",
