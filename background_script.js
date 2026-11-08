@@ -327,7 +327,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 }
             }
 
-            // 6. Direct CDN regex scan
+            // 6. DASH Representations scan in SSR HTML / JSON blocks
+            if (!videoUrl) {
+                const repRegex = /"video_representations"\s*:\s*(\[[^\]]+\])/;
+                const repMatch = html.match(repRegex);
+                if (repMatch && repMatch[1]) {
+                    try {
+                        const reps = JSON.parse(repMatch[1]);
+                        if (Array.isArray(reps) && reps.length > 0) {
+                            reps.sort((a, b) => ((b.width * b.height) || b.bandwidth || 0) - ((a.width * a.height) || a.bandwidth || 0));
+                            if (reps[0] && (reps[0].base_url || reps[0].url)) {
+                                videoUrl = (reps[0].base_url || reps[0].url).replace(/\\\//g, '/').replace(/&amp;/g, '&');
+                            }
+                        }
+                    } catch (e) {}
+                }
+            }
+
+            // 7. Direct CDN regex scan
             if (!videoUrl) {
                 const srcMatch = html.match(/src="([^"]+?\.mp4[^"]*?)"/);
                 if (srcMatch && srcMatch[1]) {

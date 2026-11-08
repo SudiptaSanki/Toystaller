@@ -259,8 +259,14 @@
             // Check priority object extractor first
             const platformFound = platform.extractPriorityReactUrl && platform.extractPriorityReactUrl(obj, isVideoContext);
             if (platformFound) {
-                if (!isVideoContext || isValidVideo(platformFound)) {
-                    return platformFound;
+                if (typeof platformFound === 'object' && platformFound.url) {
+                    if (!isVideoContext || isValidVideo(platformFound.url)) {
+                        return platformFound;
+                    }
+                } else if (typeof platformFound === 'string') {
+                    if (!isVideoContext || isValidVideo(platformFound)) {
+                        return platformFound;
+                    }
                 }
             }
 
@@ -296,16 +302,7 @@
         let current = el;
         const platform = getPlatform();
 
-        // 1. Priority: DOM / script lookup matched strictly to video ID (Guarantees exact video!)
-        if (isVideoContext && platform.extractVideoUrlFromDOM) {
-            const domUrl = platform.extractVideoUrlFromDOM(el);
-            if (domUrl) {
-                const clean = cleanVideoUrl(domUrl);
-                if (isValidVideo(clean)) return clean;
-            }
-        }
-
-        // 2. Traverse React Fiber properties (attached to actual playing video element)
+        // 1. Traverse React Fiber properties FIRST (attached directly to actual playing video element)
         for (let i = 0; i < 14 && current; i++) {
             const key = Object.keys(current).find(k =>
                 k.startsWith('__reactProps$') || 
@@ -315,13 +312,32 @@
             if (key && current[key]) {
                 const found = searchObjForVideoUrl(current[key], new Set(), 0, isVideoContext);
                 if (found) {
-                    const clean = cleanVideoUrl(found);
-                    if (!isVideoContext || isValidVideo(clean)) {
-                        return clean;
+                    if (typeof found === 'object' && found.url) {
+                        const clean = cleanVideoUrl(found.url);
+                        if (!isVideoContext || isValidVideo(clean)) {
+                            return {
+                                url: clean,
+                                audioUrl: found.audioUrl ? cleanVideoUrl(found.audioUrl) : null
+                            };
+                        }
+                    } else if (typeof found === 'string') {
+                        const clean = cleanVideoUrl(found);
+                        if (!isVideoContext || isValidVideo(clean)) {
+                            return { url: clean, audioUrl: null };
+                        }
                     }
                 }
             }
             current = current.parentElement;
+        }
+
+        // 2. Fallback: DOM / script lookup matched to video ID
+        if (isVideoContext && platform.extractVideoUrlFromDOM) {
+            const domUrl = platform.extractVideoUrlFromDOM(el);
+            if (domUrl) {
+                const clean = cleanVideoUrl(domUrl);
+                if (isValidVideo(clean)) return { url: clean, audioUrl: null };
+            }
         }
 
         return null;
@@ -334,19 +350,32 @@
         const isVideo = e.data.isVideo !== undefined ? e.data.isVideo : true;
         const el = document.querySelector(`[data-magic-id="${id}"]`);
 
-        let url = null;
+        let result = null;
         if (el) {
-            url = extractVideoUrlFromReact(el, isVideo);
+            result = extractVideoUrlFromReact(el, isVideo);
+        }
+
+        let url = null;
+        let audioUrl = null;
+        if (result) {
+            if (typeof result === 'object') {
+                url = result.url || null;
+                audioUrl = result.audioUrl || null;
+            } else if (typeof result === 'string') {
+                url = result;
+            }
         }
 
         // Guarantee that non-video internal URLs are never sent back for video requests
         if (isVideo && url && !isValidVideo(url)) {
             url = null;
+            audioUrl = null;
         }
 
         window.postMessage({
             type: 'magic_response_react_url_' + id,
-            url: url
+            url: url,
+            audioUrl: audioUrl
         }, '*');
     });
 

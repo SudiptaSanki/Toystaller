@@ -36,8 +36,11 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             if (lower.startsWith('blob:') || lower.startsWith('data:')) return false;
             if (lower.includes('facebook.com') || lower.includes('messenger.com') || lower.includes('instagram.com')) return false;
             if (lower.includes('unified_cvc')) return false;
-            if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('stream_type=dash')) return false;
+            if (lower.includes('.m3u8') || lower.includes('.mpd')) return false;
             
+            // Reject audio-only tracks from being validated as video
+            if (lower.includes('/audio') || lower.includes('mime=audio') || lower.includes('audiocover')) return false;
+
             // Reject image extensions & covers
             if (lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('videocover') || lower.includes('/t15.')) {
                 return false;
@@ -45,9 +48,19 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
 
             const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
             const isVideoExt = lower.includes('.mp4') || lower.includes('.m4v') || lower.includes('.webm');
-            const isVideoPath = lower.includes('/v/t42.') || lower.includes('/v/t64.') || lower.includes('/video/') || lower.includes('mime=video');
+            const isVideoPath = lower.includes('/v/t42.') || lower.includes('/v/t64.') || lower.includes('/video/') || lower.includes('mime=video') || lower.includes('stream_type=dash');
 
             return isCdn && (isVideoExt || isVideoPath);
+        },
+
+        isValidAudio(url) {
+            if (!url || typeof url !== 'string') return false;
+            const lower = url.toLowerCase();
+            if (lower.startsWith('blob:') || lower.startsWith('data:')) return false;
+            if (lower.includes('facebook.com') || lower.includes('messenger.com') || lower.includes('instagram.com')) return false;
+            const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
+            const isAudio = lower.includes('/audio') || lower.includes('mime=audio') || lower.includes('.m4a') || lower.includes('.mp3');
+            return isCdn && isAudio;
         },
 
         cleanVideoUrl(url) {
@@ -556,7 +569,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             if (!val || typeof val !== 'object') return null;
 
             if (isVideoContext) {
-                // 1. Facebook HD Progressive URL (highest quality master)
+                // 1. Facebook HD Progressive URL (highest quality single-file master with audio included)
                 const hdCandidates = [
                     val.playable_url_quality_hd,
                     val.browser_native_hd_url,
@@ -567,21 +580,85 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 for (const c of hdCandidates) {
                     if (typeof c === 'string') {
                         const clean = this.cleanVideoUrl(c);
-                        if (clean && this.isValidVideo(clean)) return clean;
+                        if (clean && this.isValidVideo(clean)) return { url: clean };
                     }
                 }
 
-                // 2. Multi-version video candidate array
+                // 2. DASH Representations (1080p / 720p master video stream + accompanying audio stream)
+                let representations = null;
+                if (Array.isArray(val.video_representations)) {
+                    representations = val.video_representations;
+                } else if (Array.isArray(val.representations)) {
+                    representations = val.representations;
+                }
+
+                if (representations && representations.length > 0) {
+                    let bestVideo = null;
+                    let bestAudio = null;
+
+                    for (const r of representations) {
+                        if (!r) continue;
+                        const rUrl = r.base_url || r.baseUrl || r.url;
+                        if (!rUrl || typeof rUrl !== 'string') continue;
+                        const clean = this.cleanVideoUrl(rUrl);
+                        if (!clean) continue;
+
+                        const mime = (r.mime_type || r.mimeType || '').toLowerCase();
+                        const isAudio = mime.includes('audio') || clean.includes('/audio') || clean.includes('mime=audio');
+                        const bw = parseInt(r.bandwidth || r.bitrate || '0', 10);
+                        const w = parseInt(r.width || '0', 10);
+                        const h = parseInt(r.height || '0', 10);
+
+                        if (isAudio) {
+                            if (!bestAudio || bw > (bestAudio.bandwidth || 0)) {
+                                bestAudio = { url: clean, bandwidth: bw };
+                            }
+                        } else {
+                            const resScore = (w * h) || bw;
+                            if (!bestVideo || resScore > ((bestVideo.width * bestVideo.height) || bestVideo.bandwidth || 0)) {
+                                bestVideo = { url: clean, width: w, height: h, bandwidth: bw };
+                            }
+                        }
+                    }
+
+                    // Look for audio in audio_representations or audio property
+                    if (!bestAudio) {
+                        const audioReps = val.audio_representations || val.audioRepresentations || (val.audio && val.audio.representations);
+                        if (Array.isArray(audioReps) && audioReps.length > 0) {
+                            for (const a of audioReps) {
+                                const aUrl = a.base_url || a.baseUrl || a.url;
+                                if (aUrl && typeof aUrl === 'string') {
+                                    const clean = this.cleanVideoUrl(aUrl);
+                                    if (clean) {
+                                        const bw = parseInt(a.bandwidth || a.bitrate || '0', 10);
+                                        if (!bestAudio || bw > (bestAudio.bandwidth || 0)) {
+                                            bestAudio = { url: clean, bandwidth: bw };
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (bestVideo && bestVideo.url && this.isValidVideo(bestVideo.url)) {
+                        return {
+                            url: bestVideo.url,
+                            audioUrl: bestAudio ? bestAudio.url : null
+                        };
+                    }
+                }
+
+                // 3. Multi-version video candidate array
                 if (Array.isArray(val.video_versions) && val.video_versions.length > 0) {
                     const valid = val.video_versions
                         .map(v => (v && typeof v.url === 'string') ? this.cleanVideoUrl(v.url) : null)
                         .filter(u => u && this.isValidVideo(u));
                     if (valid.length > 0) {
-                        return valid[0];
+                        return { url: valid[0] };
                     }
                 }
 
-                // 3. Facebook SD Progressive & Generic URLs
+                // 4. Facebook SD Progressive & Generic URLs
                 const sdCandidates = [
                     val.playable_url,
                     val.browser_native_sd_url,
@@ -596,7 +673,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 for (const c of sdCandidates) {
                     if (typeof c === 'string') {
                         const clean = this.cleanVideoUrl(c);
-                        if (clean && this.isValidVideo(clean)) return clean;
+                        if (clean && this.isValidVideo(clean)) return { url: clean };
                     }
                 }
             } else {
@@ -784,12 +861,16 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 }
             }
 
-            // Pass 2: Scan scripts with high-confidence playable keys
-            for (const s of scripts) {
-                const text = s.textContent;
-                if (text && (text.includes('playable_url_quality_hd') || text.includes('browser_native_hd_url') || text.includes('progressive_download_url') || text.includes('playable_url'))) {
-                    const found = parseScriptText(text);
-                    if (found) return found;
+            // Pass 2: Scan scripts with high-confidence playable keys ONLY on single-video routes
+            const path = window.location.pathname.toLowerCase();
+            const isSingleVideoRoute = path.startsWith('/watch') || path.startsWith('/reel/') || path.startsWith('/videos/');
+            if (isSingleVideoRoute) {
+                for (const s of scripts) {
+                    const text = s.textContent;
+                    if (text && (text.includes('playable_url_quality_hd') || text.includes('browser_native_hd_url') || text.includes('progressive_download_url') || text.includes('playable_url'))) {
+                        const found = parseScriptText(text);
+                        if (found) return found;
+                    }
                 }
             }
 

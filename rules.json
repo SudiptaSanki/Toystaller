@@ -15,6 +15,18 @@
           "operation": "set",
           "value": "https://www.instagram.com"
         }
+      ],
+      "responseHeaders": [
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
+        },
+        {
+          "header": "Cross-Origin-Resource-Policy",
+          "operation": "set",
+          "value": "cross-origin"
+        }
       ]
     },
     "condition": {
@@ -37,6 +49,18 @@
           "header": "Origin",
           "operation": "set",
           "value": "https://www.facebook.com"
+        }
+      ],
+      "responseHeaders": [
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
+        },
+        {
+          "header": "Cross-Origin-Resource-Policy",
+          "operation": "set",
+          "value": "cross-origin"
         }
       ]
     },
@@ -61,6 +85,18 @@
           "operation": "set",
           "value": "https://www.facebook.com"
         }
+      ],
+      "responseHeaders": [
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
+        },
+        {
+          "header": "Cross-Origin-Resource-Policy",
+          "operation": "set",
+          "value": "cross-origin"
+        }
       ]
     },
     "condition": {
@@ -83,6 +119,18 @@
           "header": "Origin",
           "operation": "set",
           "value": "https://www.linkedin.com"
+        }
+      ],
+      "responseHeaders": [
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
+        },
+        {
+          "header": "Cross-Origin-Resource-Policy",
+          "operation": "set",
+          "value": "cross-origin"
         }
       ]
     },
@@ -113,6 +161,18 @@
           "operation": "set",
           "value": "https://web.whatsapp.com"
         }
+      ],
+      "responseHeaders": [
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
+        },
+        {
+          "header": "Cross-Origin-Resource-Policy",
+          "operation": "set",
+          "value": "cross-origin"
+        }
       ]
     },
     "condition": {
@@ -135,6 +195,18 @@
           "header": "Origin",
           "operation": "set",
           "value": "https://web.whatsapp.com"
+        }
+      ],
+      "responseHeaders": [
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
+        },
+        {
+          "header": "Cross-Origin-Resource-Policy",
+          "operation": "set",
+          "value": "cross-origin"
         }
       ]
     },

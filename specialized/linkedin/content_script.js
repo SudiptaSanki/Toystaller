@@ -60,7 +60,7 @@ function pickBestVideoUrl(urls) {
         const lower = u.toLowerCase();
         if (lower.includes('bytestart') || lower.includes('byteend')) return false;
         if (lower.includes('videocover') || lower.includes('/image/') || lower.includes('.jpg') || lower.includes('.png') || lower.includes('.webp')) return false;
-        if (lower.includes('.mpd') || lower.includes('stream_type=dash')) return false;
+        if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('stream_type=dash') || lower.includes('manifest')) return false;
         if (lower.includes('/audio') || lower.includes('audio')) return false;
         return true;
     });

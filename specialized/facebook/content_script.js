@@ -37,12 +37,15 @@ function bootToystaller() {
     }
 }
 
-const pageInterceptedVideoUrls = new Set();
+const pageInterceptedVideoUrls = [];
 window.addEventListener('message', (e) => {
     if (e.data && e.data.type === 'toystaller_video_urls' && Array.isArray(e.data.urls)) {
         e.data.urls.forEach(url => {
             if (isValidVideoUrl(url)) {
-                pageInterceptedVideoUrls.add(url);
+                const idx = pageInterceptedVideoUrls.indexOf(url);
+                if (idx !== -1) pageInterceptedVideoUrls.splice(idx, 1);
+                pageInterceptedVideoUrls.unshift(url);
+                if (pageInterceptedVideoUrls.length > 25) pageInterceptedVideoUrls.pop();
             }
         });
     }
@@ -93,8 +96,11 @@ function isValidVideoUrl(url) {
     if (lower.startsWith('blob:') || lower.startsWith('data:')) return false;
     if (lower.includes('facebook.com') || lower.includes('messenger.com') || lower.includes('instagram.com')) return false;
     if (lower.includes('unified_cvc')) return false;
-    if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('stream_type=dash')) return false;
+    if (lower.includes('.m3u8') || lower.includes('.mpd')) return false;
     
+    // Reject audio-only tracks from being treated as main video
+    if (lower.includes('/audio') || lower.includes('mime=audio') || lower.includes('audiocover')) return false;
+
     // Reject image extensions & covers
     if (lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('videocover') || lower.includes('/t15.')) {
         return false;
@@ -102,7 +108,7 @@ function isValidVideoUrl(url) {
 
     const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
     const isVideoExt = lower.includes('.mp4') || lower.includes('.m4v') || lower.includes('.webm');
-    const isVideoPath = lower.includes('/v/t42.') || lower.includes('/v/t64.') || lower.includes('/video/') || lower.includes('mime=video');
+    const isVideoPath = lower.includes('/v/t42.') || lower.includes('/v/t64.') || lower.includes('/video/') || lower.includes('mime=video') || lower.includes('stream_type=dash');
 
     return isCdn && (isVideoExt || isVideoPath);
 }
@@ -113,7 +119,8 @@ function scoreVideoUrl(url) {
     if (lower.includes('.mp4') || lower.includes('.m4v')) score += 15;
     if (lower.includes('quality_hd') || lower.includes('_hd') || lower.includes('native_hd') || lower.includes('dash_h264')) score += 30;
     if (lower.includes('video.fbcdn.net')) score += 20;
-    if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('/playlist/') || lower.includes('/manifest/') || lower.includes('stream_type=dash')) score -= 50;
+    if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('/playlist/') || lower.includes('/manifest/')) score -= 50;
+    if (lower.includes('stream_type=dash')) score += 20;
     
     // Aggressive scoring for HD resolutions
     if (lower.includes('1080')) score += 25;
@@ -309,20 +316,27 @@ function injectDownloadButtons() {
                             safeSendMessage({ action: 'openInNewTab', url: getHighResImageUrl() });
                         }, 250);
                     } else {
-                        const openVideo = (url) => {
-                            const clean = cleanVideoUrl(url);
+                        const openVideo = (mediaData) => {
+                            const videoUrl = typeof mediaData === 'string' ? mediaData : (mediaData && mediaData.url);
+                            const audioUrl = typeof mediaData === 'object' ? mediaData.audioUrl : null;
+                            const clean = cleanVideoUrl(videoUrl);
                             if (clean && isValidVideoUrl(clean)) {
-                                safeSendMessage({ action: 'openInNewTab', url: clean, isVideo: true });
+                                safeSendMessage({
+                                    action: 'openInNewTab',
+                                    url: clean,
+                                    audioUrl: audioUrl,
+                                    isVideo: true,
+                                    platform: 'facebook'
+                                });
                             } else {
                                 alert('Could not find the HD video URL yet.\n\nTip: Make sure the video has started playing, then click the button again.');
                             }
                         };
 
-                        if (openBtn.__resolvedVideoUrl && isValidVideoUrl(openBtn.__resolvedVideoUrl)) {
-                            openVideo(openBtn.__resolvedVideoUrl);
-                        } else {
-                            getMediaUrl(openVideo);
-                        }
+                        // ALWAYS do a dynamic resolve for the currently playing video on click!
+                        // Never lock to a stale cached URL from a previous reel or post!
+                        openBtn.style.opacity = '1';
+                        getMediaUrl(openVideo, false);
                     }
                 });
                 buttons.push(openBtn);
@@ -398,13 +412,12 @@ function injectDownloadButtons() {
                 return buttons;
             };
 
-            // Pre-resolve video URL to conditionally show/hide the blue button
+            // Pre-resolve video URL to conditionally show the blue button
             const preResolveVideoUrl = (openBtn) => {
                 if (!isVideo) return;
-                getMediaUrl((url) => {
-                    const clean = cleanVideoUrl(url);
-                    if (clean && isValidVideoUrl(clean)) {
-                        openBtn.__resolvedVideoUrl = clean;
+                getMediaUrl((result) => {
+                    const u = typeof result === 'string' ? result : (result && result.url);
+                    if (u && isValidVideoUrl(u)) {
                         openBtn.style.display = 'flex';
                     }
                 }, true);
@@ -412,21 +425,27 @@ function injectDownloadButtons() {
 
             const getMediaUrl = (callback, silent = false) => {
                 if (isVideo) {
+                    const currentMagicId = 'fb_vid_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+                    media.setAttribute('data-magic-id', currentMagicId);
+
                     let resolved = false;
                     const handler = (e) => {
-                        if (!e.data || e.data.type !== 'magic_response_react_url_' + magicId) return;
+                        if (!e.data || e.data.type !== 'magic_response_react_url_' + currentMagicId) return;
                         if (resolved) return;
                         resolved = true;
                         window.removeEventListener('message', handler);
                         const clean = cleanVideoUrl(e.data.url);
                         if (clean && isValidVideoUrl(clean)) {
-                            callback(clean);
+                            callback({
+                                url: clean,
+                                audioUrl: e.data.audioUrl ? cleanVideoUrl(e.data.audioUrl) : null
+                            });
                         } else {
                             getMediaUrlFallback(callback, silent);
                         }
                     };
                     window.addEventListener('message', handler);
-                    window.postMessage({ type: 'magic_get_react_url', id: magicId, isVideo: isVideo }, '*');
+                    window.postMessage({ type: 'magic_get_react_url', id: currentMagicId, isVideo: isVideo }, '*');
 
                     setTimeout(() => {
                         if (resolved) return;
@@ -560,13 +579,14 @@ function injectDownloadButtons() {
                     }
                 }
 
-                // 2. Fetch watch page via background script if videoId is known or on Reel/Watch
-                if (targetVideoId || window.location.href.includes('/reel/') || window.location.href.includes('/watch')) {
+                // 2. Fetch watch page via background script if videoId is known or on dedicated Reel/Watch route
+                const isDedicatedRoute = window.location.pathname.startsWith('/reel/') || window.location.pathname.startsWith('/watch') || window.location.pathname.startsWith('/videos/');
+                if (targetVideoId || isDedicatedRoute) {
                     safeSendMessage({ action: 'fetchMobileFacebookVideo', url: window.location.href, videoId: targetVideoId }, (resp) => {
                         if (resp && resp.url) {
                             const clean = cleanVideoUrl(resp.url);
                             if (clean && isValidVideoUrl(clean)) {
-                                callback(clean);
+                                callback({ url: clean, audioUrl: null });
                                 return;
                             }
                         }
@@ -578,17 +598,17 @@ function injectDownloadButtons() {
                 fallbackToIntercepted();
 
                 function fallbackToIntercepted() {
-                    // 3. Check in-memory intercepted video URLs from fetch/XHR
-                    if (isVideo && pageInterceptedVideoUrls.size > 0) {
+                    // 3. Check in-memory intercepted video URLs from fetch/XHR (most recent first)
+                    if (isVideo && pageInterceptedVideoUrls.length > 0) {
                         const platform = PlatformManager.getPlatform();
-                        const cleaned = Array.from(pageInterceptedVideoUrls).map(cleanVideoUrl).filter(Boolean);
+                        const cleaned = pageInterceptedVideoUrls.map(cleanVideoUrl).filter(Boolean);
                         const candidates = cleaned.filter(isValidVideoUrl);
                         const filtered = platform.filterBackgroundUrls ? platform.filterBackgroundUrls(candidates, true) : candidates;
 
                         if (filtered.length > 0) {
                             const best = pickBestVideoUrl(filtered);
                             if (best && isValidVideoUrl(best)) {
-                                callback(best);
+                                callback({ url: best, audioUrl: null });
                                 return;
                             }
                         }
@@ -603,7 +623,7 @@ function injectDownloadButtons() {
                             if (candidates.length > 0) {
                                 const best = pickBestVideoUrl(candidates);
                                 if (best && isValidVideoUrl(best)) {
-                                    callback(best);
+                                    callback({ url: best, audioUrl: null });
                                     return;
                                 }
                             }
@@ -628,6 +648,7 @@ function injectDownloadButtons() {
                         }
                     };
                     setTimeout(doPreResolve, 200);
+                    media.addEventListener('loadstart', doPreResolve, { passive: true });
                     media.addEventListener('play', doPreResolve, { passive: true });
                     media.addEventListener('playing', doPreResolve, { passive: true });
                 }

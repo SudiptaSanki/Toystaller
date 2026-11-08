@@ -468,8 +468,12 @@
                         hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => videoPlayer.play().catch(() => {}));
                     } else {
                         console.warn("Toystaller Player: Direct preview blocked or pending:", cleanUrl);
-                        resText.textContent = 'Preview restricted by host. Click "Download Video" above to save the master MP4 directly.';
-                        resText.style.color = '#ef4444';
+                        if (cleanUrl && !cleanUrl.startsWith('blob:') && !cleanUrl.startsWith('data:')) {
+                            window.location.replace(cleanUrl);
+                        } else {
+                            resText.textContent = 'Preview restricted by host. Click "Download Video" above to save the master MP4 directly.';
+                            resText.style.color = '#ef4444';
+                        }
                     }
                 });
             }
