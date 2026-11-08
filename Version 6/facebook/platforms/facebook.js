@@ -572,6 +572,8 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
 
         looksLikeReactVideo(val, key) {
             if (!val || typeof val !== 'string') return false;
+            // Never treat DASH video-only streams as high-priority direct videos (they lack audio)
+            if (val.toLowerCase().includes('stream_type=dash')) return false;
             return this.isValidVideo(val);
         },
 
@@ -579,7 +581,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             if (!val || typeof val !== 'object') return null;
 
             if (isVideoContext) {
-                // 1. Facebook HD Progressive URL (highest quality master)
+                // 1. Facebook HD Progressive URL (highest quality master WITH AUDIO)
                 const hdCandidates = [
                     val.playable_url_quality_hd,
                     val.browser_native_hd_url,
@@ -590,42 +592,51 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 for (const c of hdCandidates) {
                     if (typeof c === 'string') {
                         const clean = this.cleanVideoUrl(c);
-                        if (clean && this.isValidVideo(clean)) return clean;
+                        if (clean && this.isValidVideo(clean) && !clean.toLowerCase().includes('stream_type=dash')) return clean;
                     }
                 }
 
-                // 2. Multi-version video candidate array
+                // 2. Multi-version video candidate array (WITH AUDIO)
                 if (Array.isArray(val.video_versions) && val.video_versions.length > 0) {
                     const valid = val.video_versions
                         .map(v => (v && typeof v.url === 'string') ? this.cleanVideoUrl(v.url) : null)
-                        .filter(u => u && this.isValidVideo(u));
+                        .filter(u => u && this.isValidVideo(u) && !u.toLowerCase().includes('stream_type=dash'));
                     if (valid.length > 0) {
                         return valid[0];
                     }
                 }
 
-                // 3. Facebook SD Progressive & Generic URLs
+                // 3. Facebook SD Progressive URLs (WITH AUDIO)
                 const sdCandidates = [
                     val.playable_url,
                     val.browser_native_sd_url,
                     val.sd_src,
                     val.sd_src_no_ratelimit,
-                    val.playback_url,
                     val.progressiveUrl,
-                    val.streamingUrl,
-                    val.stream_url,
-                    val.unmuted_src,
                     val.video_url,
                     val.videoUrl
                 ];
                 for (const c of sdCandidates) {
                     if (typeof c === 'string') {
                         const clean = this.cleanVideoUrl(c);
+                        if (clean && this.isValidVideo(clean) && !clean.toLowerCase().includes('stream_type=dash')) return clean;
+                    }
+                }
+
+                // 4. Fallback to DASH Representations & Streams (when no progressive video exists)
+                const dashCandidates = [
+                    val.playback_url,
+                    val.streamingUrl,
+                    val.stream_url,
+                    val.unmuted_src
+                ];
+                for (const c of dashCandidates) {
+                    if (typeof c === 'string') {
+                        const clean = this.cleanVideoUrl(c);
                         if (clean && this.isValidVideo(clean)) return clean;
                     }
                 }
 
-                // 4. Representations array (common in Facebook DASH/Reels trees)
                 if (Array.isArray(val.representations) && val.representations.length > 0) {
                     const videoReps = val.representations.filter(rep => {
                         const u = rep && (rep.base_url || rep.url || rep.playback_url);
@@ -943,6 +954,112 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                         text.includes('base_url')
                     )) {
                         const found = parseScriptText(text);
+                        if (found) return found;
+                    }
+                }
+            }
+
+            return null;
+        },
+
+        // --- DOM / Script Tag Audio Extractor for Facebook DASH streams ---
+        extractAudioUrlFromDOM(el) {
+            if (!el) return null;
+
+            const parseAudioScriptText = (text) => {
+                if (!text) return null;
+
+                // 1. Check audio representations (mime_type: audio/mp4)
+                const audioRepRegex = /"mime_type"\s*:\s*"audio\/mp4"[^}]*?"base_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
+                let repM = audioRepRegex.exec(text);
+                if (!repM) {
+                    const audioRepRegex2 = /"base_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"[^}]*?"mime_type"\s*:\s*"audio\/mp4"/g;
+                    repM = audioRepRegex2.exec(text);
+                }
+                if (repM && repM[1]) {
+                    try {
+                        const raw = JSON.parse('"' + repM[1] + '"');
+                        const clean = this.cleanVideoUrl(raw);
+                        if (clean && this.isValidAudio(clean)) return clean;
+                    } catch(e) {
+                        const clean = this.cleanVideoUrl(repM[1]);
+                        if (clean && this.isValidAudio(clean)) return clean;
+                    }
+                }
+
+                // 2. Check audio_url / audio_src
+                const audioUrlMatch = text.match(/"audio(?:_src|_url|_playback_url)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+                if (audioUrlMatch && audioUrlMatch[1]) {
+                    try {
+                        const raw = JSON.parse('"' + audioUrlMatch[1] + '"');
+                        const clean = this.cleanVideoUrl(raw);
+                        if (clean && this.isValidAudio(clean)) return clean;
+                    } catch(e) {
+                        const clean = this.cleanVideoUrl(audioUrlMatch[1]);
+                        if (clean && this.isValidAudio(clean)) return clean;
+                    }
+                }
+
+                // 3. Direct CDN audio track regex (/v/t42., stream_type=audio, mime=audio)
+                const cdnAudioRegex = /"(https:(?:\\\/\\\/|\/\/)[^"]+?(?:fbcdn\.net|fbsbx\.com)[^"]+?(?:\/v\/t42\.|stream_type=audio|mime(?:=|%3d)audio)[^"]*)"/g;
+                let cdnM;
+                while ((cdnM = cdnAudioRegex.exec(text)) !== null) {
+                    try {
+                        const raw = JSON.parse('"' + cdnM[1] + '"');
+                        const clean = this.cleanVideoUrl(raw);
+                        if (clean && this.isValidAudio(clean)) return clean;
+                    } catch(e) {
+                        const clean = this.cleanVideoUrl(cdnM[1]);
+                        if (clean && this.isValidAudio(clean)) return clean;
+                    }
+                }
+
+                return null;
+            };
+
+            let videoId = null;
+            let current = el;
+            for (let i = 0; i < 20 && current; i++) {
+                if (current.dataset && (current.dataset.videoId || current.dataset.video_id)) {
+                    videoId = current.dataset.videoId || current.dataset.video_id;
+                    break;
+                }
+                const link = current.querySelector ? current.querySelector('a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"], a[href*="story_fbid="], a[href*="/posts/"]') : null;
+                if (link && link.href) {
+                    const m = link.href.match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=)(\d+)/);
+                    if (m) { videoId = m[1]; break; }
+                }
+                current = current.parentElement;
+            }
+
+            if (!videoId) {
+                const urlMatch = window.location.href.match(/(?:videos\/|watch\/?\?v=|reel\/)(\d+)/);
+                if (urlMatch) videoId = urlMatch[1];
+            }
+
+            const scripts = document.querySelectorAll('script[type="application/json"], script:not([src])');
+
+            // Pass 1: Scan scripts containing videoId
+            if (videoId) {
+                for (const s of scripts) {
+                    const text = s.textContent;
+                    if (text && text.includes(videoId)) {
+                        const found = parseAudioScriptText(text);
+                        if (found) return found;
+                    }
+                }
+            }
+
+            // Pass 2: Dedicated pages
+            const isDedicatedPage = window.location.pathname.includes('/reel') ||
+                                    window.location.pathname.includes('/watch') ||
+                                    window.location.pathname.includes('/videos/') ||
+                                    (this.hasActiveModal && this.hasActiveModal());
+            if (isDedicatedPage) {
+                for (const s of scripts) {
+                    const text = s.textContent;
+                    if (text && (text.includes('audio') || text.includes('/v/t42.') || text.includes('representations'))) {
+                        const found = parseAudioScriptText(text);
                         if (found) return found;
                     }
                 }

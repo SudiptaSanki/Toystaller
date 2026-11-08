@@ -159,6 +159,12 @@
 
         const platform = getPlatform();
 
+        // Check if the current object directly has priority master video candidates (with audio)
+        if (platform.extractPriorityReactUrl) {
+            const priority = platform.extractPriorityReactUrl(obj, isVideoContext);
+            if (priority) return priority;
+        }
+
         if (Array.isArray(obj)) {
             for (let item of obj) {
                 const res = searchObjForVideoUrl(item, seen, depth + 1, isVideoContext);
@@ -184,10 +190,6 @@
                         }
                     }
                 } else if (typeof val === 'object') {
-                    const platformFound = platform.extractPriorityReactUrl && platform.extractPriorityReactUrl(val, isVideoContext);
-                    if (platformFound) {
-                        return platformFound;
-                    }
                     const nested = searchObjForVideoUrl(val, seen, depth + 1, isVideoContext);
                     if (nested) return nested;
                 }
@@ -234,7 +236,30 @@
         let current = el;
         const platform = getPlatform();
 
-        // 1. Prioritize React Fiber inspection directly on the clicked media element & its parent tree
+        // Pass 1: Try React Fiber for PROGRESSIVE videos (complete with audio)
+        for (let i = 0; i < 20 && current; i++) {
+            const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
+                k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+            if (key && current[key]) {
+                const found = searchObjForVideoUrl(current[key], new Set(), 0, isVideoContext);
+                if (found && !found.toLowerCase().includes('stream_type=dash')) return found;
+            }
+            current = current.parentElement;
+        }
+
+        // Pass 2: Check DOM scripts for progressive videos (playable_url_quality_hd, browser_native_hd_url, playable_url)
+        if (platform.extractVideoUrlFromDOM) {
+            const domUrl = platform.extractVideoUrlFromDOM(el);
+            if (domUrl && !domUrl.toLowerCase().includes('stream_type=dash')) return domUrl;
+        }
+
+        // Pass 3: Fallback to DOM scripts or React Fiber DASH streams (e.g. 2-hour videos)
+        if (platform.extractVideoUrlFromDOM) {
+            const domUrl = platform.extractVideoUrlFromDOM(el);
+            if (domUrl) return domUrl;
+        }
+
+        current = el;
         for (let i = 0; i < 20 && current; i++) {
             const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
                 k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
@@ -245,12 +270,6 @@
             current = current.parentElement;
         }
 
-        // 2. Fallback to DOM / Relay script extraction for the specific video
-        if (platform.extractVideoUrlFromDOM) {
-            const domUrl = platform.extractVideoUrlFromDOM(el);
-            if (domUrl) return domUrl;
-        }
-
         return null;
     }
 
@@ -258,7 +277,6 @@
         if (!el) return null;
         let current = el;
         const platform = getPlatform();
-        if (!platform.extractPriorityAudioUrl && !platform.isValidAudio) return null;
 
         for (let i = 0; i < 20 && current; i++) {
             const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
@@ -269,6 +287,12 @@
             }
             current = current.parentElement;
         }
+
+        if (platform.extractAudioUrlFromDOM) {
+            const domAudio = platform.extractAudioUrlFromDOM(el);
+            if (domAudio) return domAudio;
+        }
+
         return null;
     }
 

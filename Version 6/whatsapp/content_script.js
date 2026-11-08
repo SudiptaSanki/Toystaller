@@ -90,6 +90,15 @@ function scoreVideoUrl(url) {
     // Base video format recognition
     if (lower.includes('.mp4') || lower.includes('.m4v') || lower.includes('.webm')) score += 50;
 
+    // Heavily boost progressive MP4s containing full audio (complete master video)
+    if ((lower.includes('.mp4') || lower.includes('.m4v')) && !lower.includes('stream_type=dash') && !lower.includes('mime=video')) {
+        score += 100;
+    }
+    // Penalize silent DASH video-only streams when progressive muxed MP4s exist
+    if (lower.includes('stream_type=dash') || lower.includes('/o1/v/')) {
+        score -= 60;
+    }
+
     // Reject / heavily penalize unplayable fragments and manifests
     if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('/playlist/') || lower.includes('/manifest/')) score -= 100;
     if (lower.includes('bytestart') || lower.includes('byteend')) score -= 100;
@@ -621,7 +630,20 @@ function injectDownloadButtons() {
                         resolved = true;
                         window.removeEventListener('message', handler);
                         if (e.data.url) {
-                            callback(e.data.url, e.data.audioUrl || null);
+                            let resolvedAudio = e.data.audioUrl || null;
+                            if (!resolvedAudio && pageInterceptedVideoUrls.size > 0) {
+                                resolvedAudio = pickBestAudioUrl(Array.from(pageInterceptedVideoUrls).slice(-5)) || pickBestAudioUrl(Array.from(pageInterceptedVideoUrls));
+                            }
+                            if (!resolvedAudio) {
+                                safeSendMessage({ action: 'getMediaUrls', mediaType: 'audio' }, (response) => {
+                                    if (response && response.audioUrls && response.audioUrls.length > 0) {
+                                        resolvedAudio = pickBestAudioUrl(response.audioUrls.slice(-5)) || pickBestAudioUrl(response.audioUrls);
+                                    }
+                                    callback(e.data.url, resolvedAudio);
+                                });
+                                return;
+                            }
+                            callback(e.data.url, resolvedAudio);
                         } else {
                             if (window.location.hostname.includes('facebook.com') && isVideo) {
                                 // Fallback for Facebook: ONLY attempt mobile site extraction if we have a specific video permalink

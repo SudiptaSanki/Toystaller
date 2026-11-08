@@ -175,26 +175,49 @@
 
         if (audioPlayer) {
             audioPlayer.src = activeAudioUrl;
-            // Synchronize audio playback with videoPlayer
-            videoPlayer.addEventListener('play', () => {
+            audioPlayer.preload = 'auto';
+
+            const syncAndPlay = () => {
                 audioPlayer.currentTime = videoPlayer.currentTime;
-                audioPlayer.play().catch(() => {});
-            });
-            videoPlayer.addEventListener('pause', () => {
-                audioPlayer.pause();
-            });
+                audioPlayer.volume = videoPlayer.volume;
+                audioPlayer.muted = videoPlayer.muted;
+                if (!videoPlayer.paused) {
+                    audioPlayer.play().catch(e => {
+                        console.warn("Audio play prevented:", e);
+                    });
+                }
+            };
+
+            videoPlayer.addEventListener('play', syncAndPlay);
+            videoPlayer.addEventListener('playing', syncAndPlay);
+            videoPlayer.addEventListener('pause', () => audioPlayer.pause());
             videoPlayer.addEventListener('seeking', () => {
                 audioPlayer.currentTime = videoPlayer.currentTime;
+            });
+            videoPlayer.addEventListener('seeked', () => {
+                audioPlayer.currentTime = videoPlayer.currentTime;
+                if (!videoPlayer.paused) audioPlayer.play().catch(() => {});
             });
             videoPlayer.addEventListener('volumechange', () => {
                 audioPlayer.volume = videoPlayer.volume;
                 audioPlayer.muted = videoPlayer.muted;
             });
             videoPlayer.addEventListener('timeupdate', () => {
-                if (Math.abs(audioPlayer.currentTime - videoPlayer.currentTime) > 0.3) {
+                if (Math.abs(audioPlayer.currentTime - videoPlayer.currentTime) > 0.25) {
                     audioPlayer.currentTime = videoPlayer.currentTime;
                 }
             });
+
+            // Unlock audio on first user click or keypress in player tab
+            const unlockAudio = () => {
+                if (!videoPlayer.paused) syncAndPlay();
+            };
+            window.addEventListener('click', unlockAudio, { once: true });
+            window.addEventListener('keydown', unlockAudio, { once: true });
+
+            if (!videoPlayer.paused) {
+                syncAndPlay();
+            }
         }
     }
 
@@ -404,6 +427,15 @@
                         Download Started
                     `;
                     setTimeout(restoreDlBtn, 2500);
+
+                    // If this is a separate DASH video-only stream, also automatically download the accompanying audio track
+                    if (activeAudioUrl && (activeDownloadUrl.includes('stream_type=dash') || activeDownloadUrl.includes('/o1/v/'))) {
+                        chrome.runtime.sendMessage({
+                            action: 'downloadMedia',
+                            url: activeAudioUrl,
+                            filename: activeAudioFilename
+                        });
+                    }
                 }
             });
         }
