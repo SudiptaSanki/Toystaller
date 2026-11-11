@@ -15,6 +15,33 @@
     const copyBtn = document.getElementById('copyBtn');
     const resText = document.getElementById('resolutionText');
     const formatText = document.getElementById('formatText');
+    const playerLoader = document.getElementById('playerLoader');
+    const loaderTitle = document.getElementById('loaderTitle');
+    const loaderSubText = document.getElementById('loaderSubText');
+    const retryBtn = document.getElementById('retryBtn');
+
+    function hidePlayerLoader() {
+        if (playerLoader) {
+            playerLoader.style.opacity = '0';
+            setTimeout(() => { playerLoader.style.display = 'none'; }, 250);
+        }
+    }
+
+    function showPlayerLoader(title, sub, showRetry = false) {
+        if (playerLoader) {
+            playerLoader.style.display = 'flex';
+            playerLoader.style.opacity = '1';
+            if (loaderTitle && title) loaderTitle.textContent = title;
+            if (loaderSubText && sub) loaderSubText.textContent = sub;
+            if (retryBtn) retryBtn.style.display = showRetry ? 'inline-flex' : 'none';
+        }
+    }
+
+    if (retryBtn) {
+        retryBtn.addEventListener('click', () => {
+            window.location.reload();
+        });
+    }
 
     if (!videoUrl) {
         document.body.innerHTML = `
@@ -28,6 +55,20 @@
 
     const cleanVideoUrl = videoUrl.split('#')[0];
     const cleanAudioUrl = audioUrl ? audioUrl.split('#')[0] : null;
+
+    showPlayerLoader('Loading Master Quality Stream...', 'Optimizing master audio and video for your display', false);
+    const bufferTimeout = setTimeout(() => {
+        showPlayerLoader('Stream is buffering...', 'If buffering takes longer than expected, click below to reload or download directly.', true);
+    }, 4500);
+
+    const onPlaybackReady = () => {
+        clearTimeout(bufferTimeout);
+        hidePlayerLoader();
+    };
+
+    player.addEventListener('loadeddata', onPlaybackReady);
+    player.addEventListener('canplay', onPlaybackReady);
+    player.addEventListener('playing', onPlaybackReady);
 
     player.src = cleanVideoUrl;
 
@@ -75,7 +116,8 @@
     });
 
     player.addEventListener('error', () => {
-        // Keep user inside the player with clear action instead of raw navigation
+        clearTimeout(bufferTimeout);
+        showPlayerLoader('Preview Blocked by Host', 'Click "Download Video" above to save the master MP4 directly, or reload.', true);
         resText.textContent = 'Preview blocked by host headers. Click "Download Video" above to save the master MP4 directly.';
         resText.style.color = '#e74c3c';
     });

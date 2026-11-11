@@ -113,10 +113,10 @@
                 if (isVideo && (lower.includes('videocover') || lower.includes('/image/') || lower.includes('.jpg') || lower.includes('.png') || lower.includes('.webp'))) {
                     return false;
                 }
-                if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('stream_type=dash') || lower.includes('bytestart') || lower.includes('/audio') || lower.includes('manifest')) {
+                if (lower.includes('.mpd') || lower.includes('stream_type=dash') || lower.includes('bytestart') || lower.includes('/audio')) {
                     return false;
                 }
-                return (lower.includes('licdn.com') && (lower.includes('playlist/vid') || lower.includes('video') || lower.includes('playback') || lower.includes('progressive'))) || lower.includes('.mp4');
+                return (lower.includes('licdn.com') && (lower.includes('playlist/vid') || lower.includes('video') || lower.includes('playback') || lower.includes('progressive') || lower.includes('.m3u8'))) || lower.includes('.mp4');
             });
         },
 
@@ -219,7 +219,7 @@
         isValidVideo(url) {
             if (!url || typeof url !== 'string' || !url.startsWith('http')) return false;
             const lower = url.toLowerCase();
-            if (lower.includes('.mpd') || lower.includes('.m3u8') || lower.includes('manifest')) return false;
+            if (lower.includes('.mpd')) return false;
             if (lower.includes('/audio') || lower.includes('bytestart')) return false;
             return !(lower.includes('//www.linkedin.com') || lower.includes('//linkedin.com'));
         },
@@ -234,6 +234,15 @@
                                 (targetEl.parentElement && targetEl.parentElement.getAttribute('data-sources')) ||
                                 (el.closest && el.closest('[data-sources]') && el.closest('[data-sources]').getAttribute('data-sources'));
 
+            if (!sourcesData) {
+                // Search up to nearest post / feed unit / video wrapper
+                const postContainer = targetEl.closest ? targetEl.closest('.feed-shared-update-v2, .feed-shared-linkedin-video, .video-js, [data-urn], article, main, div[data-id]') : null;
+                if (postContainer) {
+                    const childWithSources = postContainer.querySelector('[data-sources]');
+                    if (childWithSources) sourcesData = childWithSources.getAttribute('data-sources');
+                }
+            }
+
             if (!sourcesData && el.querySelector) {
                 const childWithSources = el.querySelector('[data-sources]');
                 if (childWithSources) sourcesData = childWithSources.getAttribute('data-sources');
@@ -243,36 +252,46 @@
                 try {
                     const sources = typeof sourcesData === 'string' ? JSON.parse(sourcesData) : sourcesData;
                     if (Array.isArray(sources)) {
-                        let bestMp4 = null;
-                        let bestMp4Bitrate = -1;
-                        let bestHls = null;
-                        let bestHlsBitrate = -1;
+                        let bestCandidate = null;
+                        let maxScore = -1;
+
+                        const scoreSource = (src, srcUrl) => {
+                            let score = 0;
+                            const lower = (srcUrl || '').toLowerCase();
+                            if (lower.includes('1080p') || lower.includes('1080')) score += 10800000;
+                            else if (lower.includes('720p') || lower.includes('720')) score += 7200000;
+                            else if (lower.includes('640p') || lower.includes('640')) score += 6400000;
+                            else if (lower.includes('480p') || lower.includes('480')) score += 4800000;
+                            else if (lower.includes('360p') || lower.includes('360')) score += 3600000;
+
+                            const w = parseInt(src.width || src['data-width'] || 0, 10);
+                            const h = parseInt(src.height || src['data-height'] || 0, 10);
+                            if (w && h) score += (w * h);
+
+                            const br = parseInt(src['data-bitrate'] || src.bitRate || src.bitrate || 0, 10);
+                            if (br) score += br;
+
+                            const isMp4 = (src.type && src.type.includes('mp4')) || lower.includes('.mp4');
+                            if (isMp4) score += 500000; // Progressive MP4 preferred for instant buffering
+
+                            return score;
+                        };
 
                         for (const src of sources) {
                             if (!src) continue;
                             const srcUrl = src.src || src.url || src.streamingLocation;
                             if (srcUrl && typeof srcUrl === 'string' && this.isValidVideo(srcUrl)) {
-                                if (srcUrl.includes('manifest') || srcUrl.includes('.mpd') || srcUrl.includes('/audio')) continue;
+                                if (srcUrl.includes('.mpd') || srcUrl.includes('/audio')) continue;
                                 if (src.type && src.type.includes('dash')) continue;
 
-                                const isMp4 = (src.type && src.type.includes('mp4')) || srcUrl.includes('.mp4');
-                                const bitrate = parseInt(src['data-bitrate'] || src.bitRate || src.bitrate || '0', 10);
-
-                                if (isMp4) {
-                                    if (bitrate > bestMp4Bitrate || !bestMp4) {
-                                        bestMp4Bitrate = bitrate;
-                                        bestMp4 = srcUrl;
-                                    }
-                                } else {
-                                    if (bitrate > bestHlsBitrate || !bestHls) {
-                                        bestHlsBitrate = bitrate;
-                                        bestHls = srcUrl;
-                                    }
+                                const s = scoreSource(src, srcUrl);
+                                if (s > maxScore || !bestCandidate) {
+                                    maxScore = s;
+                                    bestCandidate = srcUrl;
                                 }
                             }
                         }
-                        const chosen = bestMp4 || bestHls;
-                        if (chosen) return chosen.split('#')[0];
+                        if (bestCandidate) return bestCandidate.split('#')[0];
                     }
                 } catch (e) {}
             }

@@ -24,6 +24,33 @@
     const formatText = document.getElementById('formatText');
     const shortcutsText = document.getElementById('shortcutsText');
     const brandBadge = document.getElementById('brandBadge');
+    const playerLoader = document.getElementById('playerLoader');
+    const loaderTitle = document.getElementById('loaderTitle');
+    const loaderSubText = document.getElementById('loaderSubText');
+    const retryBtn = document.getElementById('retryBtn');
+
+    function hidePlayerLoader() {
+        if (playerLoader) {
+            playerLoader.style.opacity = '0';
+            setTimeout(() => { playerLoader.style.display = 'none'; }, 250);
+        }
+    }
+
+    function showPlayerLoader(title, sub, showRetry = false) {
+        if (playerLoader) {
+            playerLoader.style.display = 'flex';
+            playerLoader.style.opacity = '1';
+            if (loaderTitle && title) loaderTitle.textContent = title;
+            if (loaderSubText && sub) loaderSubText.textContent = sub;
+            if (retryBtn) retryBtn.style.display = showRetry ? 'inline-flex' : 'none';
+        }
+    }
+
+    if (retryBtn) {
+        retryBtn.addEventListener('click', () => {
+            window.location.reload();
+        });
+    }
 
     let activeDownloadUrl = rawUrl ? rawUrl.split('#')[0] : null;
     let activeAudioUrl = params.get('audioUrl') ? params.get('audioUrl').split('#')[0] : null;
@@ -395,57 +422,36 @@
 
             const cleanUrl = sourceUrl.split('#')[0];
             const lowerClean = cleanUrl.toLowerCase();
-            isHls = lowerClean.includes('/pl/') || 
-                    lowerClean.includes('.m3u8') || 
-                    lowerClean.includes('format=m3u8') || 
-                    lowerClean.includes('/playlist/') || 
-                    lowerClean.includes('/manifest/') || 
-                    lowerClean.includes('application/x-mpegurl');
+            const isExplicitMp4 = lowerClean.includes('.mp4') || 
+                                  lowerClean.includes('/mp4-') || 
+                                  lowerClean.includes('format=mp4') || 
+                                  lowerClean.includes('.m4v') || 
+                                  lowerClean.includes('.webm');
 
-            if (isHls && window.Hls && Hls.isSupported()) {
-                hlsInstance = new Hls({
-                    enableWorker: true,
-                    lowLatencyMode: false,
-                    backBufferLength: 90
-                });
+            isHls = !isExplicitMp4 && (
+                lowerClean.includes('.m3u8') || 
+                lowerClean.includes('format=m3u8') || 
+                lowerClean.includes('application/x-mpegurl') || 
+                lowerClean.includes('/manifest/') ||
+                lowerClean.includes('/m3u8') ||
+                (lowerClean.includes('/pl/') && !lowerClean.includes('/mp4'))
+            );
 
-                hlsInstance.loadSource(cleanUrl);
-                hlsInstance.attachMedia(videoPlayer);
+            showPlayerLoader('Loading Master Quality Stream...', 'Optimizing master audio and video for your display', false);
+            const bufferTimeout = setTimeout(() => {
+                showPlayerLoader('Stream is buffering...', 'If stream takes longer than expected, you can reload or download directly.', true);
+            }, 4500);
 
-                hlsInstance.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
-                    // Always lock to the absolute highest quality stream available
-                    if (hlsInstance.levels && hlsInstance.levels.length > 0) {
-                        hlsInstance.currentLevel = hlsInstance.levels.length - 1;
-                        const best = hlsInstance.levels[hlsInstance.levels.length - 1];
-                        resText.textContent = `${best.width || 'HD'} x ${best.height || '1080'} • Master HD Video`;
-                    }
-                    videoPlayer.play().catch(() => {});
-                });
+            const onPlaybackReady = () => {
+                clearTimeout(bufferTimeout);
+                hidePlayerLoader();
+            };
 
-                hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
-                    if (hlsInstance.levels && hlsInstance.levels[data.level]) {
-                        const l = hlsInstance.levels[data.level];
-                        resText.textContent = `${l.width} x ${l.height} • HD Video`;
-                    }
-                });
+            videoPlayer.addEventListener('loadeddata', onPlaybackReady);
+            videoPlayer.addEventListener('canplay', onPlaybackReady);
+            videoPlayer.addEventListener('playing', onPlaybackReady);
 
-                hlsInstance.on(Hls.Events.ERROR, (event, data) => {
-                    if (data.fatal) {
-                        switch (data.type) {
-                            case Hls.ErrorTypes.NETWORK_ERROR:
-                                hlsInstance.startLoad();
-                                break;
-                            case Hls.ErrorTypes.MEDIA_ERROR:
-                                hlsInstance.recoverMediaError();
-                                break;
-                            default:
-                                resText.textContent = 'Unable to stream directly. Please click "Download Video" above.';
-                                resText.style.color = '#ef4444';
-                                break;
-                        }
-                    }
-                });
-            } else {
+            const startDirectPlayback = () => {
                 videoPlayer.src = cleanUrl;
                 videoPlayer.play().catch(() => {
                     videoPlayer.muted = true;
@@ -467,17 +473,82 @@
                 });
 
                 videoPlayer.addEventListener('error', () => {
-                    if (window.Hls && Hls.isSupported() && !hlsInstance && (cleanUrl.includes('.m3u8') || cleanUrl.includes('manifest'))) {
-                        hlsInstance = new Hls();
-                        hlsInstance.loadSource(cleanUrl);
-                        hlsInstance.attachMedia(videoPlayer);
-                        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => videoPlayer.play().catch(() => {}));
+                    if (window.Hls && Hls.isSupported() && !hlsInstance) {
+                        console.log("Direct playback error, trying Hls.js fallback:", cleanUrl);
+                        startHlsPlayback();
                     } else {
+                        clearTimeout(bufferTimeout);
                         console.warn("Toystaller Player: Direct preview blocked or pending:", cleanUrl);
+                        showPlayerLoader('Preview Restricted by Host', 'Click "Download Video" above to save the master MP4 directly, or reload.', true);
                         resText.textContent = 'Preview restricted by host. Click "Download Video" above to save the master MP4 directly.';
                         resText.style.color = '#ef4444';
                     }
                 });
+            };
+
+            const startHlsPlayback = () => {
+                if (hlsInstance) {
+                    hlsInstance.destroy();
+                    hlsInstance = null;
+                }
+                hlsInstance = new Hls({
+                    enableWorker: true,
+                    lowLatencyMode: false,
+                    backBufferLength: 90
+                });
+
+                hlsInstance.loadSource(cleanUrl);
+                hlsInstance.attachMedia(videoPlayer);
+
+                hlsInstance.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+                    clearTimeout(bufferTimeout);
+                    hidePlayerLoader();
+                    if (hlsInstance.levels && hlsInstance.levels.length > 0) {
+                        hlsInstance.currentLevel = hlsInstance.levels.length - 1;
+                        const best = hlsInstance.levels[hlsInstance.levels.length - 1];
+                        resText.textContent = `${best.width || 'HD'} x ${best.height || '1080'} • Master HD Video`;
+                    }
+                    videoPlayer.play().catch(() => {});
+                });
+
+                hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
+                    if (hlsInstance.levels && hlsInstance.levels[data.level]) {
+                        const l = hlsInstance.levels[data.level];
+                        resText.textContent = `${l.width} x ${l.height} • HD Video`;
+                    }
+                });
+
+                hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+                    if (data.fatal) {
+                        if (data.details === Hls.ErrorDetails.MANIFEST_PARSING_ERROR || data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) {
+                            console.warn("Hls stream parsing failed, falling back to direct MP4 stream:", cleanUrl);
+                            hlsInstance.destroy();
+                            hlsInstance = null;
+                            startDirectPlayback();
+                            return;
+                        }
+                        switch (data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                hlsInstance.startLoad();
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                hlsInstance.recoverMediaError();
+                                break;
+                            default:
+                                clearTimeout(bufferTimeout);
+                                showPlayerLoader('Unable to Stream Directly', 'Click "Download Video" above to save the file, or reload.', true);
+                                resText.textContent = 'Unable to stream directly. Please click "Download Video" above.';
+                                resText.style.color = '#ef4444';
+                                break;
+                        }
+                    }
+                });
+            };
+
+            if (isHls && window.Hls && Hls.isSupported()) {
+                startHlsPlayback();
+            } else {
+                startDirectPlayback();
             }
         } else {
             // Image Mode

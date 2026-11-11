@@ -92,21 +92,74 @@
     }
     .player-container {
       margin-top: 56px;
-      padding: 20px;
+      padding: 16px;
+      width: 100%;
       max-width: 95vw;
-      max-height: calc(100vh - 80px);
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
     }
-    video {
-      max-width: 90vw;
-      max-height: 80vh;
+    .video-wrapper {
+      position: relative;
+      width: 90vw;
+      max-width: 1280px;
+      height: 75vh;
+      max-height: 760px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #000;
       border-radius: 12px;
-      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.85);
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.85);
+      overflow: hidden;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      border-radius: 12px;
       background: #000;
       outline: none;
+    }
+    .player-loader {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(11, 12, 15, 0.88);
+      backdrop-filter: blur(8px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      transition: opacity 0.3s ease;
+    }
+    .loader-spinner {
+      width: 44px;
+      height: 44px;
+      border: 4px solid rgba(255, 255, 255, 0.15);
+      border-top-color: #1877f2;
+      border-radius: 50%;
+      animation: toystaller-spin 0.8s linear infinite;
+      margin-bottom: 16px;
+    }
+    @keyframes toystaller-spin {
+      to { transform: rotate(360deg); }
+    }
+    .loader-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 6px;
+    }
+    .loader-sub {
+      font-size: 12px;
+      color: #8a8d91;
+      max-width: 320px;
+      text-align: center;
     }
     .info {
       margin-top: 14px;
@@ -142,7 +195,15 @@
   </div>
 
   <div class="player-container">
-    <video id="videoPlayer" controls autoplay playsinline preload="auto"></video>
+    <div class="video-wrapper">
+      <div id="playerLoader" class="player-loader">
+        <div class="loader-spinner"></div>
+        <div id="loaderTitle" class="loader-title">Loading Highest Quality Stream...</div>
+        <div id="loaderSubText" class="loader-sub">Optimizing master audio and video for your display</div>
+        <button id="retryBtn" class="btn btn-secondary" style="display:none; margin-top: 14px;">Reload Stream</button>
+      </div>
+      <video id="videoPlayer" controls autoplay playsinline preload="auto"></video>
+    </div>
     <audio id="audioPlayer" style="display:none;" preload="auto"></audio>
     <div class="info">
       <span id="resolutionText">HD MP4 Stream</span>

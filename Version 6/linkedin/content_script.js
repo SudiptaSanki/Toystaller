@@ -32,6 +32,63 @@ function triggerDownload(url) {
     });
 }
 
+function ensureSpinStyle() {
+    if (!document.getElementById('toystaller-spin-style')) {
+        const spinStyle = document.createElement('style');
+        spinStyle.id = 'toystaller-spin-style';
+        spinStyle.textContent = `@keyframes toystaller-spin { to { transform: rotate(360deg); } }`;
+        (document.head || document.documentElement).appendChild(spinStyle);
+    }
+}
+
+function showToystallerToast(text, duration = 3000, isSuccess = false) {
+    ensureSpinStyle();
+    let toast = document.getElementById('toystaller-toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'toystaller-toast';
+        toast.style.cssText = `
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: rgba(18, 19, 23, 0.95);
+            color: #fff;
+            padding: 10px 18px;
+            border-radius: 8px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 13px;
+            font-weight: 500;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            z-index: 999999;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: opacity 0.25s ease, transform 0.25s ease;
+            opacity: 0;
+            transform: translateY(10px);
+            pointer-events: none;
+        `;
+        document.body.appendChild(toast);
+    }
+
+    const iconSvg = isSuccess ? 
+        `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>` :
+        `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0a66c2" stroke-width="2.5" style="animation:toystaller-spin 0.8s linear infinite;"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10"></path></svg>`;
+
+    toast.innerHTML = `${iconSvg} <span>${text}</span>`;
+    toast.style.opacity = '1';
+    toast.style.transform = 'translateY(0)';
+
+    if (toast.__timeout) clearTimeout(toast.__timeout);
+    if (duration > 0) {
+        toast.__timeout = setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateY(10px)';
+        }, duration);
+    }
+}
+
 function scoreVideoUrl(url) {
     let score = 0;
     const lower = url.toLowerCase();
@@ -221,17 +278,27 @@ function injectDownloadButtons() {
                         }, 250);
                     } else {
                         // Video: resolve fresh URL and open in dedicated LinkedIn player tab
+                        if (openBtn.__resolvedVideoUrl) {
+                            safeSendMessage({ action: 'openInNewTab', url: openBtn.__resolvedVideoUrl, isVideo: true, platform: 'linkedin' });
+                            return;
+                        }
+
                         openBtn.style.opacity = '1';
                         openBtn.style.backgroundColor = 'rgba(10, 102, 194, 0.95)';
+                        const origSvg = openBtn.innerHTML;
+                        openBtn.innerHTML = `<svg width="${iconSize}" height="${iconSize}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:toystaller-spin 0.8s linear infinite;"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10"></path></svg>`;
+                        showToystallerToast('Fetching Best HD Video Quality...', 5000, false);
 
                         getMediaUrl((url) => {
                             openBtn.style.opacity = '0.55';
                             openBtn.style.backgroundColor = 'rgba(30,30,30,0.75)';
+                            openBtn.innerHTML = origSvg;
                             if (url) {
                                 openBtn.__resolvedVideoUrl = url;
+                                showToystallerToast('Opening Master HD Player...', 2000, true);
                                 safeSendMessage({ action: 'openInNewTab', url: url, isVideo: true, platform: 'linkedin' });
                             } else {
-                                alert('Could not resolve video URL. If the video is paused, please click play and try again.');
+                                showToystallerToast('Could not resolve video URL. Please start playing video and retry.', 4000, false);
                             }
                         }, false);
                     }

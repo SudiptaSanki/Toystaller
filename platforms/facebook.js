@@ -623,7 +623,64 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                     }
                 }
 
-                // 2. Facebook HD Progressive URL (true HD master single file)
+                // 2. High-Bitrate DASH Representations (1080p/720p representations paired with audio like yt-dlp)
+                const reps = val.video_representations || val.representations;
+                if (Array.isArray(reps) && reps.length > 0) {
+                    let bestVideo = null;
+                    let bestAudio = null;
+
+                    for (const r of reps) {
+                        if (!r) continue;
+                        const rUrl = r.base_url || r.baseUrl || r.url;
+                        if (!rUrl || typeof rUrl !== 'string') continue;
+                        const clean = this.cleanVideoUrl(rUrl);
+                        if (!clean) continue;
+
+                        const mime = (r.mime_type || r.mimeType || '').toLowerCase();
+                        const isAudio = mime.includes('audio') || clean.includes('/audio') || clean.includes('mime=audio') || this.isAudio(clean);
+                        const bw = parseInt(r.bandwidth || r.bitrate || '0', 10);
+                        const w = parseInt(r.width || '0', 10);
+                        const h = parseInt(r.height || '0', 10);
+
+                        if (isAudio) {
+                            if (!bestAudio || bw > (bestAudio.bandwidth || 0)) {
+                                bestAudio = { url: clean, bandwidth: bw };
+                            }
+                        } else if (this.isValidVideo(clean)) {
+                            const resScore = (w * h) || bw;
+                            if (!bestVideo || resScore > ((bestVideo.width * bestVideo.height) || bestVideo.bandwidth || 0)) {
+                                bestVideo = { url: clean, width: w, height: h, bandwidth: bw };
+                            }
+                        }
+                    }
+
+                    if (!bestAudio) {
+                        const audioReps = val.audio_representations || val.audioRepresentations || (val.audio && val.audio.representations);
+                        if (Array.isArray(audioReps) && audioReps.length > 0) {
+                            for (const a of audioReps) {
+                                const aUrl = a.base_url || a.baseUrl || a.url;
+                                if (aUrl && typeof aUrl === 'string') {
+                                    const cleanA = this.cleanVideoUrl(aUrl);
+                                    if (cleanA && this.isValidAudio(cleanA)) {
+                                        bestAudio = { url: cleanA };
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // If DASH has true 1080p or high bitrate (>= 2.5 Mbps) with audio, prioritize it over SD progressive MP4
+                    const isMasterQuality = bestVideo && (bestVideo.width >= 1080 || bestVideo.height >= 1080 || bestVideo.bandwidth >= 2500000);
+                    if (isMasterQuality && bestAudio) {
+                        return {
+                            url: bestVideo.url,
+                            audioUrl: bestAudio.url
+                        };
+                    }
+                }
+
+                // 3. Facebook HD Progressive URL (true HD master single file)
                 const hdCandidates = [
                     val.playable_url_quality_hd,
                     val.browser_native_hd_url,
@@ -637,8 +694,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                     }
                 }
 
-                // 3. DASH Representations (1080p/720p representations paired with audio)
-                const reps = val.video_representations || val.representations;
+                // 4. Standard DASH Representations fallback (if progressive HD wasn't available)
                 if (Array.isArray(reps) && reps.length > 0) {
                     let bestVideo = null;
                     let bestAudio = null;

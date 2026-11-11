@@ -117,28 +117,62 @@
     PatchedXHR.prototype = OriginalXHR.prototype;
     window.XMLHttpRequest = PatchedXHR;
 
-    // --- React Fiber Extraction ---
+    // --- React Fiber Extraction & Hierarchy Walk ---
+
+    function scoreVideoUrl(url) {
+        if (!url || typeof url !== 'string') return 0;
+        const lower = url.toLowerCase();
+        let score = 0;
+        if (lower.includes('1080p') || lower.includes('1080')) score += 10800000;
+        else if (lower.includes('720p') || lower.includes('720')) score += 7200000;
+        else if (lower.includes('640p') || lower.includes('640')) score += 6400000;
+        else if (lower.includes('480p') || lower.includes('480')) score += 4800000;
+        else if (lower.includes('360p') || lower.includes('360')) score += 3600000;
+        if (lower.includes('.mp4')) score += 500000;
+        return score;
+    }
 
     function searchObjForVideoUrl(obj, seen = new Set(), depth = 0, isVideoContext = true) {
-        if (depth > 12 || !obj || typeof obj !== 'object') return null;
+        if (depth > 10 || !obj || typeof obj !== 'object') return null;
         if (seen.has(obj)) return null;
         seen.add(obj);
 
         const platform = getPlatform();
 
         if (Array.isArray(obj)) {
+            let bestUrl = null;
+            let maxScore = -1;
             for (let item of obj) {
                 const res = searchObjForVideoUrl(item, seen, depth + 1, isVideoContext);
-                if (res) return res;
+                if (res) {
+                    const s = scoreVideoUrl(res);
+                    if (s > maxScore || !bestUrl) {
+                        maxScore = s;
+                        bestUrl = res;
+                    }
+                }
             }
+            if (bestUrl) return bestUrl;
         } else {
+            // Check direct priority video properties
+            const priorityKeys = ['sources', 'streamingLocations', 'videoUrl', 'playbackLocations', 'progressiveDownloadUrl', 'mp4Url', 'src', 'url'];
+            for (let key of priorityKeys) {
+                const val = obj[key];
+                if (typeof val === 'string' && val.startsWith('http') && !val.includes('blob:')) {
+                    if (isValidVideo(val)) return val;
+                } else if (typeof val === 'object' && val) {
+                    const nested = searchObjForVideoUrl(val, seen, depth + 1, isVideoContext);
+                    if (nested) return nested;
+                }
+            }
+
             for (let key of Object.keys(obj)) {
-                if (key === 'return' || key === 'sibling' || key === '_owner' || key === 'parent') continue;
+                if (key === 'return' || key === 'sibling' || key === 'child' || key === '_owner' || key === 'stateNode' || priorityKeys.includes(key)) continue;
 
                 const val = obj[key];
                 if (typeof val === 'string') {
                     const isHttp = val.startsWith('https://') || val.startsWith('http://');
-                    if (isHttp && !val.includes('blob:')) {
+                    if (isHttp && !val.includes('blob:') && !val.includes('bytestart')) {
                         if (platform.shouldSkipReactValue && platform.shouldSkipReactValue(val, key, isVideoContext)) {
                             continue;
                         }
@@ -146,21 +180,15 @@
                         if (isVideoContext) {
                             const isVideo = platform.looksLikeReactVideo && platform.looksLikeReactVideo(val, key);
                             const isImage = platform.looksLikeReactImage && platform.looksLikeReactImage(val, key);
-                            if (isVideo && !isImage && !val.toLowerCase().includes('bytestart')) {
-                                return val;
-                            }
+                            if (isVideo && !isImage) return val;
                         } else {
                             const isImage = platform.looksLikeReactImage && platform.looksLikeReactImage(val, key);
-                            if (isImage) {
-                                return val;
-                            }
+                            if (isImage) return val;
                         }
                     }
                 } else if (typeof val === 'object') {
                     const platformFound = platform.extractPriorityReactUrl && platform.extractPriorityReactUrl(val, isVideoContext);
-                    if (platformFound) {
-                        return platformFound;
-                    }
+                    if (platformFound) return platformFound;
                     const nested = searchObjForVideoUrl(val, seen, depth + 1, isVideoContext);
                     if (nested) return nested;
                 }
@@ -169,23 +197,73 @@
         return null;
     }
 
+    function extractVideoUrlFromFiberTree(el, isVideoContext = true) {
+        if (!el) return null;
+
+        const fiberKey = Object.keys(el).find(k =>
+            k.startsWith('__reactFiber$') ||
+            k.startsWith('__reactInternalInstance$')
+        );
+        let fiber = fiberKey ? el[fiberKey] : null;
+
+        let bestUrl = null;
+        let maxScore = -1;
+        let depth = 0;
+
+        while (fiber && depth < 45) {
+            if (fiber.memoizedProps) {
+                const found = searchObjForVideoUrl(fiber.memoizedProps, new Set(), 0, isVideoContext);
+                if (found) {
+                    const s = scoreVideoUrl(found);
+                    if (s > maxScore || !bestUrl) { maxScore = s; bestUrl = found; }
+                    if (s >= 7000000) break; // Found 720p or 1080p HD
+                }
+            }
+            if (fiber.memoizedState) {
+                const found = searchObjForVideoUrl(fiber.memoizedState, new Set(), 0, isVideoContext);
+                if (found) {
+                    const s = scoreVideoUrl(found);
+                    if (s > maxScore || !bestUrl) { maxScore = s; bestUrl = found; }
+                    if (s >= 7000000) break;
+                }
+            }
+            if (fiber.pendingProps) {
+                const found = searchObjForVideoUrl(fiber.pendingProps, new Set(), 0, isVideoContext);
+                if (found) {
+                    const s = scoreVideoUrl(found);
+                    if (s > maxScore || !bestUrl) { maxScore = s; bestUrl = found; }
+                    if (s >= 7000000) break;
+                }
+            }
+            fiber = fiber.return;
+            depth++;
+        }
+
+        return bestUrl;
+    }
+
     function extractVideoUrlFromReact(el, isVideoContext = true) {
-        let current = el;
         const platform = getPlatform();
 
+        // 1. Try DOM extraction first (data-sources on container)
         if (platform.extractVideoUrlFromDOM) {
             const domUrl = platform.extractVideoUrlFromDOM(el);
             if (domUrl) return domUrl;
         }
 
-        for (let i = 0; i < 12 && current; i++) {
-            const key = Object.keys(current).find(k => k.startsWith('__reactProps$') ||
-                k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-            if (key && current[key]) {
-                const found = searchObjForVideoUrl(current[key], new Set(), 0, isVideoContext);
-                if (found) return found;
+        // 2. Deep React Fiber walk up 45 components
+        if (el) {
+            const fiberUrl = extractVideoUrlFromFiberTree(el, isVideoContext);
+            if (fiberUrl) return fiberUrl;
+        }
+
+        // 3. Check nearest child video if el was a wrapper
+        if (el && el.querySelector) {
+            const childVid = el.querySelector('video');
+            if (childVid) {
+                const childFiberUrl = extractVideoUrlFromFiberTree(childVid, isVideoContext);
+                if (childFiberUrl) return childFiberUrl;
             }
-            current = current.parentElement;
         }
 
         return null;

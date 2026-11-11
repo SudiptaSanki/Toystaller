@@ -12,6 +12,33 @@
     const dlBtn = document.getElementById('dlBtn');
     const copyBtn = document.getElementById('copyBtn');
     const resText = document.getElementById('resolutionText');
+    const playerLoader = document.getElementById('playerLoader');
+    const loaderTitle = document.getElementById('loaderTitle');
+    const loaderSubText = document.getElementById('loaderSubText');
+    const retryBtn = document.getElementById('retryBtn');
+
+    function hidePlayerLoader() {
+        if (playerLoader) {
+            playerLoader.style.opacity = '0';
+            setTimeout(() => { playerLoader.style.display = 'none'; }, 250);
+        }
+    }
+
+    function showPlayerLoader(title, sub, showRetry = false) {
+        if (playerLoader) {
+            playerLoader.style.display = 'flex';
+            playerLoader.style.opacity = '1';
+            if (loaderTitle && title) loaderTitle.textContent = title;
+            if (loaderSubText && sub) loaderSubText.textContent = sub;
+            if (retryBtn) retryBtn.style.display = showRetry ? 'inline-flex' : 'none';
+        }
+    }
+
+    if (retryBtn) {
+        retryBtn.addEventListener('click', () => {
+            window.location.reload();
+        });
+    }
 
     if (!rawUrl) {
         document.body.innerHTML = `
@@ -26,88 +53,130 @@
     // Strip any fragment identifier so standard media elements can stream directly
     const videoUrl = rawUrl.split('#')[0];
     const lowerVideoUrl = videoUrl.toLowerCase();
-    const isHls = lowerVideoUrl.includes('/pl/') || 
-                  lowerVideoUrl.includes('.m3u8') || 
-                  lowerVideoUrl.includes('format=m3u8') || 
-                  lowerVideoUrl.includes('/playlist/') || 
-                  lowerVideoUrl.includes('/manifest/') || 
-                  lowerVideoUrl.includes('application/x-mpegurl');
+    const isExplicitMp4 = lowerVideoUrl.includes('.mp4') || 
+                          lowerVideoUrl.includes('/mp4-') || 
+                          lowerVideoUrl.includes('format=mp4') || 
+                          lowerVideoUrl.includes('.m4v') || 
+                          lowerVideoUrl.includes('.webm');
+
+    const isHls = !isExplicitMp4 && (
+        lowerVideoUrl.includes('.m3u8') || 
+        lowerVideoUrl.includes('format=m3u8') || 
+        lowerVideoUrl.includes('application/x-mpegurl') || 
+        lowerVideoUrl.includes('/manifest/') ||
+        lowerVideoUrl.includes('/m3u8') ||
+        (lowerVideoUrl.includes('/pl/') && !lowerVideoUrl.includes('/mp4'))
+    );
 
     let hlsInstance = null;
 
+    showPlayerLoader('Loading Master Quality Stream...', 'Optimizing master audio and video for your display', false);
+    const bufferTimeout = setTimeout(() => {
+        showPlayerLoader('Stream is buffering...', 'If stream takes longer than expected, click below to reload or download directly.', true);
+    }, 4500);
+
+    const onPlaybackReady = () => {
+        clearTimeout(bufferTimeout);
+        hidePlayerLoader();
+    };
+
+    player.addEventListener('loadeddata', onPlaybackReady);
+    player.addEventListener('canplay', onPlaybackReady);
+    player.addEventListener('playing', onPlaybackReady);
+
+    function startDirectPlayback() {
+        player.src = videoUrl;
+        player.play().catch(() => {
+            player.muted = true;
+            player.play().catch(() => {});
+        });
+
+        player.addEventListener('loadedmetadata', () => {
+            if (player.videoWidth && player.videoHeight) {
+                resText.textContent = `${player.videoWidth} x ${player.videoHeight} • HD MP4`;
+                resText.style.color = '#8a8d91';
+            }
+        });
+
+        player.addEventListener('error', (e) => {
+            console.warn('Player direct video error:', player.error, e);
+            if (window.Hls && Hls.isSupported() && !hlsInstance) {
+                console.log("Trying Hls.js fallback for stream:", videoUrl);
+                startHlsPlayback();
+            } else {
+                clearTimeout(bufferTimeout);
+                showPlayerLoader('Preview Restricted by Host', 'Click "Download Video" above to save directly, or reload stream.', true);
+                resText.textContent = 'Preview restricted by host. Click "Download Video" above to save directly.';
+                resText.style.color = '#e74c3c';
+            }
+        });
+    }
+
+    function startHlsPlayback() {
+        if (hlsInstance) {
+            hlsInstance.destroy();
+            hlsInstance = null;
+        }
+        hlsInstance = new Hls({
+            enableWorker: true,
+            lowLatencyMode: false,
+            backBufferLength: 90
+        });
+
+        hlsInstance.loadSource(videoUrl);
+        hlsInstance.attachMedia(player);
+
+        hlsInstance.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+            clearTimeout(bufferTimeout);
+            hidePlayerLoader();
+            player.play().catch(() => {});
+            if (data && data.levels && data.levels.length > 0) {
+                const best = data.levels.reduce((p, c) => (c.height > p.height ? c : p), data.levels[0]);
+                resText.textContent = `${best.width || 'HD'} x ${best.height || '720'} • HD Video`;
+                resText.style.color = '#8a8d91';
+            }
+        });
+
+        hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
+            if (hlsInstance.levels && hlsInstance.levels[data.level]) {
+                const l = hlsInstance.levels[data.level];
+                resText.textContent = `${l.width} x ${l.height} • HD Video`;
+            }
+        });
+
+        hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+            if (data.fatal) {
+                if (data.details === Hls.ErrorDetails.MANIFEST_PARSING_ERROR || data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) {
+                    console.warn("HLS manifest parsing failed, falling back to direct MP4 stream:", videoUrl);
+                    hlsInstance.destroy();
+                    hlsInstance = null;
+                    startDirectPlayback();
+                    return;
+                }
+                console.warn('HLS fatal error:', data);
+                switch (data.type) {
+                    case Hls.ErrorTypes.NETWORK_ERROR:
+                        hlsInstance.startLoad();
+                        break;
+                    case Hls.ErrorTypes.MEDIA_ERROR:
+                        hlsInstance.recoverMediaError();
+                        break;
+                    default:
+                        clearTimeout(bufferTimeout);
+                        showPlayerLoader('Unable to Stream Directly', 'Click "Download Video" above to save the file, or reload.', true);
+                        resText.textContent = 'Unable to stream directly. Please click "Download Video" above to save the file.';
+                        resText.style.color = '#e74c3c';
+                        break;
+                }
+            }
+        });
+    }
+
     function initPlayer() {
         if (isHls && window.Hls && Hls.isSupported()) {
-            hlsInstance = new Hls({
-                enableWorker: true,
-                lowLatencyMode: false,
-                backBufferLength: 90
-            });
-
-            hlsInstance.loadSource(videoUrl);
-            hlsInstance.attachMedia(player);
-
-            hlsInstance.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
-                player.play().catch(() => {});
-                if (data && data.levels && data.levels.length > 0) {
-                    const best = data.levels.reduce((p, c) => (c.height > p.height ? c : p), data.levels[0]);
-                    resText.textContent = `${best.width || 'HD'} x ${best.height || '720'} • HD Video`;
-                    resText.style.color = '#8a8d91';
-                }
-            });
-
-            hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
-                if (hlsInstance.levels && hlsInstance.levels[data.level]) {
-                    const l = hlsInstance.levels[data.level];
-                    resText.textContent = `${l.width} x ${l.height} • HD Video`;
-                }
-            });
-
-            hlsInstance.on(Hls.Events.ERROR, (event, data) => {
-                if (data.fatal) {
-                    console.warn('HLS fatal error:', data);
-                    switch (data.type) {
-                        case Hls.ErrorTypes.NETWORK_ERROR:
-                            hlsInstance.startLoad();
-                            break;
-                        case Hls.ErrorTypes.MEDIA_ERROR:
-                            hlsInstance.recoverMediaError();
-                            break;
-                        default:
-                            resText.textContent = 'Unable to stream directly. Please click "Download Video" above to save the file.';
-                            resText.style.color = '#e74c3c';
-                            break;
-                    }
-                }
-            });
+            startHlsPlayback();
         } else {
-            player.src = videoUrl;
-
-            player.addEventListener('loadedmetadata', () => {
-                if (player.videoWidth && player.videoHeight) {
-                    resText.textContent = `${player.videoWidth} x ${player.videoHeight} • HD MP4`;
-                    resText.style.color = '#8a8d91';
-                }
-            });
-
-            player.addEventListener('error', (e) => {
-                console.warn('Player video error:', player.error, e);
-                // Attempt fallback to Hls if native player failed on unrecognized HLS format
-                if (window.Hls && Hls.isSupported() && !hlsInstance) {
-                    hlsInstance = new Hls();
-                    hlsInstance.loadSource(videoUrl);
-                    hlsInstance.attachMedia(player);
-                    hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => player.play().catch(() => {}));
-                    hlsInstance.on(Hls.Events.ERROR, (evt, d) => {
-                        if (d.fatal) {
-                            resText.textContent = 'Unable to stream directly. Please click "Download Video" above to save the file.';
-                            resText.style.color = '#e74c3c';
-                        }
-                    });
-                } else {
-                    resText.textContent = 'Preview restricted by host. Click "Download Video" above to save directly.';
-                    resText.style.color = '#e74c3c';
-                }
-            });
+            startDirectPlayback();
         }
     }
 

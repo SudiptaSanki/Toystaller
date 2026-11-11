@@ -24,6 +24,33 @@
     const formatText = document.getElementById('formatText');
     const shortcutsText = document.getElementById('shortcutsText');
     const brandBadge = document.getElementById('brandBadge');
+    const playerLoader = document.getElementById('playerLoader');
+    const loaderTitle = document.getElementById('loaderTitle');
+    const loaderSubText = document.getElementById('loaderSubText');
+    const retryBtn = document.getElementById('retryBtn');
+
+    function hidePlayerLoader() {
+        if (playerLoader) {
+            playerLoader.style.opacity = '0';
+            setTimeout(() => { playerLoader.style.display = 'none'; }, 250);
+        }
+    }
+
+    function showPlayerLoader(title, sub, showRetry = false) {
+        if (playerLoader) {
+            playerLoader.style.display = 'flex';
+            playerLoader.style.opacity = '1';
+            if (loaderTitle && title) loaderTitle.textContent = title;
+            if (loaderSubText && sub) loaderSubText.textContent = sub;
+            if (retryBtn) retryBtn.style.display = showRetry ? 'inline-flex' : 'none';
+        }
+    }
+
+    if (retryBtn) {
+        retryBtn.addEventListener('click', () => {
+            window.location.reload();
+        });
+    }
 
     let activeDownloadUrl = rawUrl ? rawUrl.split('#')[0] : null;
     let activeAudioUrl = params.get('audioUrl') ? params.get('audioUrl').split('#')[0] : null;
@@ -155,6 +182,109 @@
         }, 15000);
     }
 
+    // --- Chunked Range Downloader for Large / Long Media (Bypasses 500MB rate limits) ---
+    async function downloadMediaWithProgress(url, filename, onProgress) {
+        let totalSize = 0;
+        let supportsRange = false;
+        try {
+            const probeRes = await fetch(url, {
+                headers: { 'Range': 'bytes=0-0' }
+            });
+            if (probeRes.status === 206) {
+                supportsRange = true;
+                const cr = probeRes.headers.get('Content-Range');
+                if (cr) {
+                    const m = cr.match(/\/(\d+)/);
+                    if (m) totalSize = parseInt(m[1], 10);
+                }
+            }
+        } catch (e) {
+            console.warn("Probe range check failed:", e);
+        }
+
+        // If file is small (< 80MB) or server doesn't support Range, use background download dispatcher
+        if (!supportsRange || totalSize < 80 * 1024 * 1024) {
+            return new Promise((resolve, reject) => {
+                chrome.runtime.sendMessage({
+                    action: 'downloadMedia',
+                    url: url,
+                    filename: filename
+                }, (response) => {
+                    if (response && response.success) resolve();
+                    else reject(new Error((response && response.error) || 'Download failed'));
+                });
+            });
+        }
+
+        // For large media (> 80MB, e.g. 754MB 1.23h Facebook video):
+        // Download via 50MB Range chunks to prevent network drops and CDN aborts
+        const CHUNK_SIZE = 50 * 1024 * 1024;
+        const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
+
+        let fileWritable = null;
+        if (window.showSaveFilePicker) {
+            try {
+                const ext = filename.split('.').pop() || 'mp4';
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: filename,
+                    types: [{
+                        description: 'Media File',
+                        accept: { [`video/${ext}`]: [`.${ext}`] }
+                    }]
+                });
+                fileWritable = await handle.createWritable();
+            } catch (err) {
+                console.log("Picker cancelled or unsupported, fallback to memory buffer:", err);
+            }
+        }
+
+        const buffers = fileWritable ? null : [];
+        let downloadedBytes = 0;
+
+        for (let i = 0; i < totalChunks; i++) {
+            const start = i * CHUNK_SIZE;
+            const end = Math.min((i + 1) * CHUNK_SIZE - 1, totalSize - 1);
+
+            if (onProgress) onProgress(downloadedBytes, totalSize);
+
+            const chunkRes = await fetch(url, {
+                headers: { 'Range': `bytes=${start}-${end}` }
+            });
+
+            if (!chunkRes.ok && chunkRes.status !== 206) {
+                throw new Error(`Chunk download failed with status ${chunkRes.status}`);
+            }
+
+            const chunkBuf = await chunkRes.arrayBuffer();
+            if (fileWritable) {
+                await fileWritable.write(chunkBuf);
+            } else {
+                buffers.push(chunkBuf);
+            }
+
+            downloadedBytes += chunkBuf.byteLength;
+            if (onProgress) onProgress(downloadedBytes, totalSize);
+        }
+
+        if (fileWritable) {
+            await fileWritable.close();
+            return;
+        }
+
+        const mime = filename.endsWith('.mp3') ? 'audio/mp3' : 'video/mp4';
+        const blob = new Blob(buffers, { type: mime });
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            a.remove();
+            URL.revokeObjectURL(blobUrl);
+        }, 30000);
+    }
+
     function restoreDlBtn() {
         dlBtn.disabled = false;
         dlBtn.innerHTML = `
@@ -176,12 +306,11 @@
         if (dlAudioBtn) dlAudioBtn.style.display = 'inline-flex';
         if (copyAudioBtn) copyAudioBtn.style.display = 'inline-flex';
 
-        const isSeparateVideoStream = activeAudioUrl && (
-            !activeDownloadUrl ||
+        const isSeparateVideoStream = activeAudioUrl && activeDownloadUrl && (
             activeDownloadUrl.includes('stream_type=dash') ||
             activeDownloadUrl.includes('/o1/v/') ||
-            activeMutedUrl ||
-            (platformParam && platformParam.toLowerCase() === 'facebook')
+            activeDownloadUrl.includes('mime=video') ||
+            activeMutedUrl === activeDownloadUrl
         );
 
         if (audioPlayer) {
@@ -261,18 +390,6 @@
 
         if (activeAudioUrl) {
             setupAudioControls(activeAudioUrl, detectedPlatform);
-        } else if (isVideo && chrome.runtime && chrome.runtime.sendMessage) {
-            chrome.runtime.sendMessage({ action: 'getMediaUrls', mediaType: 'audio' }, (res) => {
-                if (res && res.audioUrls && res.audioUrls.length > 0) {
-                    setupAudioControls(res.audioUrls[0], detectedPlatform);
-                } else if (res && res.urls && res.urls.length > 0) {
-                    const foundAudio = res.urls.find(u => {
-                        const l = u.toLowerCase();
-                        return l.includes('/v/t42.') || l.includes('mime=audio') || l.includes('stream_type=audio');
-                    });
-                    if (foundAudio) setupAudioControls(foundAudio, detectedPlatform);
-                }
-            });
         }
 
         if (isVideo) {
@@ -281,29 +398,22 @@
             if (shortcutsText) shortcutsText.style.display = 'inline-flex';
             
             const isDash = sourceUrl && sourceUrl.includes('stream_type=dash');
+            const isSeparate = activeAudioUrl && (isDash || sourceUrl.includes('/o1/v/') || activeMutedUrl === sourceUrl);
             if (formatText) {
-                if (isDash && activeAudioUrl) {
+                if (isSeparate) {
                     formatText.textContent = 'Direct DASH Stream (Synced Audio + Video)';
-                } else if (activeAudioUrl) {
-                    formatText.textContent = 'Direct Master Audio + Video';
                 } else {
-                    formatText.textContent = 'Direct Master Media';
+                    formatText.textContent = 'Direct Master Audio + Video';
                 }
             }
 
-            if (activeAudioUrl) {
-                if (dlAudioBtn) dlAudioBtn.style.display = 'inline-flex';
-                if (copyAudioBtn) copyAudioBtn.style.display = 'inline-flex';
-            }
+            // Always display Audio options for video mode (empowers editors and users to extract/copy audio)
+            if (dlAudioBtn) dlAudioBtn.style.display = 'inline-flex';
+            if (copyAudioBtn) copyAudioBtn.style.display = 'inline-flex';
 
-            const effectiveMuted = activeMutedUrl || (activeAudioUrl ? sourceUrl : (isDash ? sourceUrl : null));
-            if (effectiveMuted) {
-                if (dlMutedBtn) dlMutedBtn.style.display = 'inline-flex';
-                if (copyMutedBtn) copyMutedBtn.style.display = 'inline-flex';
-            } else {
-                if (dlMutedBtn) dlMutedBtn.style.display = 'none';
-                if (copyMutedBtn) copyMutedBtn.style.display = 'none';
-            }
+            // Always display Muted/Video stream options for video mode
+            if (dlMutedBtn) dlMutedBtn.style.display = 'inline-flex';
+            if (copyMutedBtn) copyMutedBtn.style.display = 'inline-flex';
 
             dlBtn.innerHTML = `
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
@@ -312,14 +422,75 @@
 
             const cleanUrl = sourceUrl.split('#')[0];
             const lowerClean = cleanUrl.toLowerCase();
-            isHls = lowerClean.includes('/pl/') || 
-                    lowerClean.includes('.m3u8') || 
-                    lowerClean.includes('format=m3u8') || 
-                    lowerClean.includes('/playlist/') || 
-                    lowerClean.includes('/manifest/') || 
-                    lowerClean.includes('application/x-mpegurl');
+            const isExplicitMp4 = lowerClean.includes('.mp4') || 
+                                  lowerClean.includes('/mp4-') || 
+                                  lowerClean.includes('format=mp4') || 
+                                  lowerClean.includes('.m4v') || 
+                                  lowerClean.includes('.webm');
 
-            if (isHls && window.Hls && Hls.isSupported()) {
+            isHls = !isExplicitMp4 && (
+                lowerClean.includes('.m3u8') || 
+                lowerClean.includes('format=m3u8') || 
+                lowerClean.includes('application/x-mpegurl') || 
+                lowerClean.includes('/manifest/') ||
+                lowerClean.includes('/m3u8') ||
+                (lowerClean.includes('/pl/') && !lowerClean.includes('/mp4'))
+            );
+
+            showPlayerLoader('Loading Master Quality Stream...', 'Optimizing master audio and video for your display', false);
+            const bufferTimeout = setTimeout(() => {
+                showPlayerLoader('Stream is buffering...', 'If stream takes longer than expected, you can reload or download directly.', true);
+            }, 4500);
+
+            const onPlaybackReady = () => {
+                clearTimeout(bufferTimeout);
+                hidePlayerLoader();
+            };
+
+            videoPlayer.addEventListener('loadeddata', onPlaybackReady);
+            videoPlayer.addEventListener('canplay', onPlaybackReady);
+            videoPlayer.addEventListener('playing', onPlaybackReady);
+
+            const startDirectPlayback = () => {
+                videoPlayer.src = cleanUrl;
+                videoPlayer.play().catch(() => {
+                    videoPlayer.muted = true;
+                    videoPlayer.play().catch(() => {});
+                });
+
+                const unmuteHandler = () => {
+                    if (videoPlayer && videoPlayer.muted && isVideoMode) {
+                        videoPlayer.muted = false;
+                    }
+                };
+                window.addEventListener('click', unmuteHandler, { once: true });
+                window.addEventListener('keydown', unmuteHandler, { once: true });
+
+                videoPlayer.addEventListener('loadedmetadata', () => {
+                    if (videoPlayer.videoWidth && videoPlayer.videoHeight) {
+                        resText.textContent = `${videoPlayer.videoWidth} x ${videoPlayer.videoHeight} • HD MP4`;
+                    }
+                });
+
+                videoPlayer.addEventListener('error', () => {
+                    if (window.Hls && Hls.isSupported() && !hlsInstance) {
+                        console.log("Direct playback error, trying Hls.js fallback:", cleanUrl);
+                        startHlsPlayback();
+                    } else {
+                        clearTimeout(bufferTimeout);
+                        console.warn("Toystaller Player: Direct preview blocked or pending:", cleanUrl);
+                        showPlayerLoader('Preview Restricted by Host', 'Click "Download Video" above to save the master MP4 directly, or reload.', true);
+                        resText.textContent = 'Preview restricted by host. Click "Download Video" above to save the master MP4 directly.';
+                        resText.style.color = '#ef4444';
+                    }
+                });
+            };
+
+            const startHlsPlayback = () => {
+                if (hlsInstance) {
+                    hlsInstance.destroy();
+                    hlsInstance = null;
+                }
                 hlsInstance = new Hls({
                     enableWorker: true,
                     lowLatencyMode: false,
@@ -330,7 +501,8 @@
                 hlsInstance.attachMedia(videoPlayer);
 
                 hlsInstance.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
-                    // Always lock to the absolute highest quality stream available
+                    clearTimeout(bufferTimeout);
+                    hidePlayerLoader();
                     if (hlsInstance.levels && hlsInstance.levels.length > 0) {
                         hlsInstance.currentLevel = hlsInstance.levels.length - 1;
                         const best = hlsInstance.levels[hlsInstance.levels.length - 1];
@@ -348,6 +520,13 @@
 
                 hlsInstance.on(Hls.Events.ERROR, (event, data) => {
                     if (data.fatal) {
+                        if (data.details === Hls.ErrorDetails.MANIFEST_PARSING_ERROR || data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) {
+                            console.warn("Hls stream parsing failed, falling back to direct MP4 stream:", cleanUrl);
+                            hlsInstance.destroy();
+                            hlsInstance = null;
+                            startDirectPlayback();
+                            return;
+                        }
                         switch (data.type) {
                             case Hls.ErrorTypes.NETWORK_ERROR:
                                 hlsInstance.startLoad();
@@ -356,34 +535,20 @@
                                 hlsInstance.recoverMediaError();
                                 break;
                             default:
+                                clearTimeout(bufferTimeout);
+                                showPlayerLoader('Unable to Stream Directly', 'Click "Download Video" above to save the file, or reload.', true);
                                 resText.textContent = 'Unable to stream directly. Please click "Download Video" above.';
                                 resText.style.color = '#ef4444';
                                 break;
                         }
                     }
                 });
+            };
+
+            if (isHls && window.Hls && Hls.isSupported()) {
+                startHlsPlayback();
             } else {
-                videoPlayer.src = cleanUrl;
-                videoPlayer.play().catch(() => {});
-
-                videoPlayer.addEventListener('loadedmetadata', () => {
-                    if (videoPlayer.videoWidth && videoPlayer.videoHeight) {
-                        resText.textContent = `${videoPlayer.videoWidth} x ${videoPlayer.videoHeight} • HD MP4`;
-                    }
-                });
-
-                videoPlayer.addEventListener('error', () => {
-                    if (window.Hls && Hls.isSupported() && !hlsInstance && (cleanUrl.includes('.m3u8') || cleanUrl.includes('manifest'))) {
-                        hlsInstance = new Hls();
-                        hlsInstance.loadSource(cleanUrl);
-                        hlsInstance.attachMedia(videoPlayer);
-                        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => videoPlayer.play().catch(() => {}));
-                    } else {
-                        console.warn("Toystaller Player: Direct preview blocked or pending:", cleanUrl);
-                        resText.textContent = 'Preview restricted by host. Click "Download Video" above to save the master MP4 directly.';
-                        resText.style.color = '#ef4444';
-                    }
-                });
+                startDirectPlayback();
             }
         } else {
             // Image Mode
@@ -434,8 +599,9 @@
     dlBtn.addEventListener('click', () => {
         if (!activeDownloadUrl) return;
 
+        dlBtn.disabled = true;
+
         if (isHls) {
-            dlBtn.disabled = true;
             dlBtn.textContent = 'Preparing download...';
 
             downloadHlsVideo(activeDownloadUrl, activeFilename, (curr, total) => {
@@ -456,29 +622,33 @@
                 });
             });
         } else {
-            chrome.runtime.sendMessage({
-                action: 'downloadMedia',
-                url: activeDownloadUrl,
-                filename: activeFilename
-            }, (response) => {
-                if (response && response.success) {
-                    dlBtn.innerHTML = `
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="20 6 9 17 4 12"></polyline>
-                        </svg>
-                        Download Started
-                    `;
-                    setTimeout(restoreDlBtn, 2500);
+            dlBtn.textContent = 'Starting download...';
+            downloadMediaWithProgress(activeDownloadUrl, activeFilename, (curr, total) => {
+                const pct = total > 0 ? Math.round((curr / total) * 100) : 0;
+                dlBtn.textContent = `Downloading ${pct}%...`;
+            }).then(() => {
+                dlBtn.innerHTML = `
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                    Download Complete!
+                `;
+                setTimeout(restoreDlBtn, 2500);
 
-                    // If this is a separate DASH video-only stream, also automatically download the accompanying audio track
-                    if (activeAudioUrl && (activeDownloadUrl.includes('stream_type=dash') || activeDownloadUrl.includes('/o1/v/'))) {
-                        chrome.runtime.sendMessage({
-                            action: 'downloadMedia',
-                            url: activeAudioUrl,
-                            filename: activeAudioFilename
-                        });
-                    }
+                // If this is a separate DASH video-only stream, also download accompanying audio
+                if (activeAudioUrl && (activeDownloadUrl.includes('stream_type=dash') || activeDownloadUrl.includes('/o1/v/'))) {
+                    downloadMediaWithProgress(activeAudioUrl, activeAudioFilename, () => {});
                 }
+            }).catch((err) => {
+                console.warn("Direct download fallback:", err);
+                chrome.runtime.sendMessage({
+                    action: 'downloadMedia',
+                    url: activeDownloadUrl,
+                    filename: activeFilename
+                }, () => {
+                    dlBtn.textContent = 'Download Started';
+                    setTimeout(restoreDlBtn, 2500);
+                });
             });
         }
     });
@@ -503,7 +673,7 @@
     // Copy Muted Video Link handler
     if (copyMutedBtn) {
         copyMutedBtn.addEventListener('click', () => {
-            const targetMuted = activeMutedUrl || (activeDownloadUrl && activeDownloadUrl.includes('stream_type=dash') ? activeDownloadUrl : null);
+            const targetMuted = activeMutedUrl || activeDownloadUrl;
             if (!targetMuted) return;
             navigator.clipboard.writeText(targetMuted).then(() => {
                 copyMutedBtn.textContent = 'Muted Copied!';
@@ -520,31 +690,43 @@
     // Download Muted Video handler
     if (dlMutedBtn) {
         dlMutedBtn.addEventListener('click', () => {
-            const targetMuted = activeMutedUrl || (activeDownloadUrl && activeDownloadUrl.includes('stream_type=dash') ? activeDownloadUrl : null);
+            const targetMuted = activeMutedUrl || activeDownloadUrl;
             if (!targetMuted) return;
             const ext = 'mp4';
             const base = (platformParam || 'Toystaller').replace(/[^a-zA-Z0-9]/g, '_');
             const dlFilename = `${base}_Muted_${Date.now()}.${ext}`;
 
-            chrome.runtime.sendMessage({
-                action: 'downloadMedia',
-                url: targetMuted,
-                filename: dlFilename
-            }, (response) => {
-                if (response && response.success) {
+            dlMutedBtn.textContent = 'Downloading Muted...';
+            downloadMediaWithProgress(targetMuted, dlFilename, (curr, total) => {
+                const pct = total > 0 ? Math.round((curr / total) * 100) : 0;
+                dlMutedBtn.textContent = `Muted ${pct}%...`;
+            }).then(() => {
+                dlMutedBtn.innerHTML = `
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                    Muted Complete!
+                `;
+                setTimeout(() => {
                     dlMutedBtn.innerHTML = `
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="20 6 9 17 4 12"></polyline>
-                        </svg>
-                        Muted Downloading
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>
+                        Download Muted
                     `;
+                }, 2500);
+            }).catch(() => {
+                chrome.runtime.sendMessage({
+                    action: 'downloadMedia',
+                    url: targetMuted,
+                    filename: dlFilename
+                }, () => {
+                    dlMutedBtn.textContent = 'Muted Started';
                     setTimeout(() => {
                         dlMutedBtn.innerHTML = `
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>
                             Download Muted
                         `;
                     }, 2500);
-                }
+                });
             });
         });
     }
@@ -571,29 +753,41 @@
         dlAudioBtn.addEventListener('click', () => {
             const targetAudio = activeAudioUrl || activeDownloadUrl;
             if (!targetAudio) return;
-            const ext = 'mp3';
+            const ext = activeAudioUrl ? 'mp3' : 'mp4';
             const base = (platformParam || 'Toystaller').replace(/[^a-zA-Z0-9]/g, '_');
             const dlFilename = activeAudioFilename || `${base}_Audio_${Date.now()}.${ext}`;
 
-            chrome.runtime.sendMessage({
-                action: 'downloadMedia',
-                url: targetAudio,
-                filename: dlFilename
-            }, (response) => {
-                if (response && response.success) {
+            dlAudioBtn.textContent = 'Downloading Audio...';
+            downloadMediaWithProgress(targetAudio, dlFilename, (curr, total) => {
+                const pct = total > 0 ? Math.round((curr / total) * 100) : 0;
+                dlAudioBtn.textContent = `Audio ${pct}%...`;
+            }).then(() => {
+                dlAudioBtn.innerHTML = `
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                    Audio Complete!
+                `;
+                setTimeout(() => {
                     dlAudioBtn.innerHTML = `
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="20 6 9 17 4 12"></polyline>
-                        </svg>
-                        Audio Downloading
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                        Download Audio
                     `;
+                }, 2500);
+            }).catch(() => {
+                chrome.runtime.sendMessage({
+                    action: 'downloadMedia',
+                    url: targetAudio,
+                    filename: dlFilename
+                }, () => {
+                    dlAudioBtn.textContent = 'Audio Started';
                     setTimeout(() => {
                         dlAudioBtn.innerHTML = `
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
                             Download Audio
                         `;
                     }, 2500);
-                }
+                });
             });
         });
     }
