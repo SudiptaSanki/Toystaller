@@ -12,6 +12,7 @@ window.addEventListener('message', (e) => {
             delete btn.__resolvedVideoId;
             delete btn.__resolvedAudioUrl;
         });
+        pageInterceptedVideoUrls.clear();
         if (window.magicOverlayManager) {
             window.magicOverlayManager.updateAllPositions();
         }
@@ -451,22 +452,23 @@ function injectDownloadButtons() {
                         });
                     } else {
                         const currentId = platform.extractVideoId ? platform.extractVideoId(media) : null;
-                        if (openBtn.__resolvedVideoUrl) {
-                            if (openBtn.__resolvedVideoId && currentId && openBtn.__resolvedVideoId !== currentId) {
-                                delete openBtn.__resolvedVideoUrl;
-                                delete openBtn.__resolvedVideoId;
-                                delete openBtn.__resolvedAudioUrl;
-                            } else {
-                                safeSendMessage({ 
-                                    action: 'openInNewTab', 
-                                    url: openBtn.__resolvedVideoUrl, 
-                                    audioUrl: openBtn.__resolvedAudioUrl || null, 
-                                    isVideo: true, 
-                                    platform: platformName 
-                                });
-                                return;
-                            }
+                        if (currentId && openBtn.__resolvedVideoId === currentId && openBtn.__resolvedVideoUrl) {
+                            safeSendMessage({ 
+                                action: 'openInNewTab', 
+                                url: openBtn.__resolvedVideoUrl, 
+                                audioUrl: openBtn.__resolvedAudioUrl || null, 
+                                progressiveUrl: openBtn.__resolvedProgressiveUrl || null,
+                                isVideo: true, 
+                                platform: platformName 
+                            });
+                            return;
                         }
+
+                        // Clear mismatched or stale cache
+                        delete openBtn.__resolvedVideoUrl;
+                        delete openBtn.__resolvedVideoId;
+                        delete openBtn.__resolvedAudioUrl;
+                        delete openBtn.__resolvedProgressiveUrl;
 
                         openBtn.style.opacity = '1';
                         openBtn.style.backgroundColor = 'rgba(52, 152, 219, 0.95)';
@@ -474,7 +476,7 @@ function injectDownloadButtons() {
                         openBtn.innerHTML = `<svg width="${iconSize}" height="${iconSize}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:toystaller-spin 0.8s linear infinite;"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10"></path></svg>`;
                         showToystallerToast('Fetching Best HD Video Quality...', 5000, false);
 
-                        getMediaUrl((url, audioUrl = null) => {
+                        getMediaUrl((url, audioUrl = null, progressiveUrl = null) => {
                             openBtn.style.opacity = '0.55';
                             openBtn.style.backgroundColor = 'rgba(30,30,30,0.75)';
                             openBtn.innerHTML = origSvg;
@@ -484,12 +486,14 @@ function injectDownloadButtons() {
                             }
                             openBtn.__resolvedVideoUrl = url;
                             openBtn.__resolvedAudioUrl = audioUrl;
+                            openBtn.__resolvedProgressiveUrl = progressiveUrl;
                             openBtn.__resolvedVideoId = currentId;
                             showToystallerToast('Opening Master HD Player...', 2000, true);
                             safeSendMessage({ 
                                 action: 'openInNewTab', 
                                 url: url, 
                                 audioUrl: audioUrl, 
+                                progressiveUrl: progressiveUrl,
                                 isVideo: true, 
                                 platform: platformName 
                             });
@@ -609,9 +613,9 @@ function injectDownloadButtons() {
                         const domUrl = platform.extractVideoUrlFromDOM(media);
                         if (domUrl) {
                             if (typeof domUrl === 'object' && domUrl.url) {
-                                callback(domUrl.url, domUrl.audioUrl || null);
+                                callback(domUrl.url, domUrl.audioUrl || null, domUrl.progressiveUrl || null);
                             } else if (typeof domUrl === 'string') {
-                                callback(domUrl, null);
+                                callback(domUrl, null, null);
                             }
                             return;
                         }

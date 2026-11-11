@@ -30,9 +30,16 @@
     {
       "matches": [
         "*://*.instagram.com/*",
+        "*://instagram.com/*",
         "*://*.linkedin.com/*",
+        "*://linkedin.com/*",
         "*://*.facebook.com/*",
-        "*://web.whatsapp.com/*"
+        "*://facebook.com/*",
+        "*://*.messenger.com/*",
+        "*://messenger.com/*",
+        "*://web.whatsapp.com/*",
+        "*://*.whatsapp.com/*",
+        "*://whatsapp.com/*"
       ],
       "js": [
         "platforms/instagram.js",

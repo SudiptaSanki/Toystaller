@@ -17,15 +17,24 @@
     const loaderSubText = document.getElementById('loaderSubText');
     const retryBtn = document.getElementById('retryBtn');
 
+    let loaderHideTimeout = null;
     function hidePlayerLoader() {
         if (playerLoader) {
+            if (loaderHideTimeout) clearTimeout(loaderHideTimeout);
             playerLoader.style.opacity = '0';
-            setTimeout(() => { playerLoader.style.display = 'none'; }, 250);
+            loaderHideTimeout = setTimeout(() => { 
+                playerLoader.style.display = 'none'; 
+                loaderHideTimeout = null;
+            }, 250);
         }
     }
 
     function showPlayerLoader(title, sub, showRetry = false) {
         if (playerLoader) {
+            if (loaderHideTimeout) {
+                clearTimeout(loaderHideTimeout);
+                loaderHideTimeout = null;
+            }
             playerLoader.style.display = 'flex';
             playerLoader.style.opacity = '1';
             if (loaderTitle && title) loaderTitle.textContent = title;
@@ -51,20 +60,24 @@
     }
 
     // Strip any fragment identifier so standard media elements can stream directly
-    const videoUrl = rawUrl.split('#')[0];
-    const lowerVideoUrl = videoUrl.toLowerCase();
-    const isExplicitMp4 = lowerVideoUrl.includes('.mp4') || 
+    let videoUrl = rawUrl.split('#')[0];
+    let progressiveUrl = params.get('progressiveUrl') ? params.get('progressiveUrl').split('#')[0] : null;
+    let lowerVideoUrl = videoUrl.toLowerCase();
+    let isExplicitMp4 = lowerVideoUrl.includes('.mp4') || 
                           lowerVideoUrl.includes('/mp4-') || 
                           lowerVideoUrl.includes('format=mp4') || 
                           lowerVideoUrl.includes('.m4v') || 
                           lowerVideoUrl.includes('.webm');
 
-    const isHls = !isExplicitMp4 && (
+    let isHls = !isExplicitMp4 && (
         lowerVideoUrl.includes('.m3u8') || 
         lowerVideoUrl.includes('format=m3u8') || 
         lowerVideoUrl.includes('application/x-mpegurl') || 
         lowerVideoUrl.includes('/manifest/') ||
         lowerVideoUrl.includes('/m3u8') ||
+        lowerVideoUrl.includes('/hls-') ||
+        lowerVideoUrl.includes('/hls/') ||
+        lowerVideoUrl.includes('quality-analysis') ||
         (lowerVideoUrl.includes('/pl/') && !lowerVideoUrl.includes('/mp4'))
     );
 
@@ -98,9 +111,14 @@
             }
         });
 
+        let directErrorTriedHls = false;
         player.addEventListener('error', (e) => {
             console.warn('Player direct video error:', player.error, e);
-            if (window.Hls && Hls.isSupported() && !hlsInstance) {
+            if (isHls && hlsInstance) {
+                return;
+            }
+            if (window.Hls && Hls.isSupported() && !directErrorTriedHls && !isHls) {
+                directErrorTriedHls = true;
                 console.log("Trying Hls.js fallback for stream:", videoUrl);
                 startHlsPlayback();
             } else {
@@ -147,10 +165,19 @@
         hlsInstance.on(Hls.Events.ERROR, (event, data) => {
             if (data.fatal) {
                 if (data.details === Hls.ErrorDetails.MANIFEST_PARSING_ERROR || data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) {
-                    console.warn("HLS manifest parsing failed, falling back to direct MP4 stream:", videoUrl);
                     hlsInstance.destroy();
                     hlsInstance = null;
-                    startDirectPlayback();
+                    if (progressiveUrl && progressiveUrl !== videoUrl) {
+                        console.warn("HLS manifest parsing failed, falling back to progressive MP4 stream:", progressiveUrl);
+                        videoUrl = progressiveUrl;
+                        isHls = false;
+                        startDirectPlayback();
+                        return;
+                    }
+                    clearTimeout(bufferTimeout);
+                    showPlayerLoader('Stream Not Compatible', 'This video stream format cannot be decoded directly by the browser. Please play the video on LinkedIn to load the standard MP4 stream.', false);
+                    resText.textContent = 'Stream could not be played directly.';
+                    resText.style.color = '#ef4444';
                     return;
                 }
                 console.warn('HLS fatal error:', data);
@@ -287,31 +314,65 @@
                 dlBtn.textContent = 'Download Complete!';
                 setTimeout(restoreDlBtn, 2500);
             }).catch((err) => {
-                console.warn('HLS client-side assembly fallback:', err);
+                console.warn('HLS client-side assembly failed:', err);
+                if (progressiveUrl) {
+                    console.log('Downloading progressive MP4 fallback:', progressiveUrl);
+                    chrome.runtime.sendMessage({
+                        action: 'downloadMedia',
+                        url: progressiveUrl,
+                        filename: filename
+                    }, () => {
+                        dlBtn.textContent = 'Download Started';
+                        setTimeout(restoreDlBtn, 2500);
+                    });
+                } else {
+                    restoreDlBtn();
+                    alert('This stream is an adaptive HLS playlist that cannot be downloaded directly as a single MP4. Please play the video on LinkedIn to load the standard progressive MP4 stream.');
+                }
+            });
+        } else {
+            fetch(videoUrl, { headers: { 'Range': 'bytes=0-0' } }).then(res => {
+                const ct = (res.headers.get('content-type') || '').toLowerCase();
+                if (ct.includes('mpegurl') || ct.includes('text/')) {
+                    alert('This stream is an adaptive HLS playlist that cannot be downloaded directly as an MP4. Please play the video on LinkedIn to load the direct progressive MP4 stream.');
+                    restoreDlBtn();
+                    return;
+                }
                 chrome.runtime.sendMessage({
                     action: 'downloadMedia',
                     url: videoUrl,
                     filename: filename
-                }, () => {
-                    dlBtn.textContent = 'Download Started';
-                    setTimeout(restoreDlBtn, 2500);
+                }, (response) => {
+                    if (response && response.success) {
+                        dlBtn.innerHTML = `
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="20 6 9 17 4 12"></polyline>
+                            </svg>
+                            Download Started
+                        `;
+                        setTimeout(restoreDlBtn, 2500);
+                    } else {
+                        restoreDlBtn();
+                    }
                 });
-            });
-        } else {
-            chrome.runtime.sendMessage({
-                action: 'downloadMedia',
-                url: videoUrl,
-                filename: filename
-            }, (response) => {
-                if (response && response.success) {
-                    dlBtn.innerHTML = `
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="20 6 9 17 4 12"></polyline>
-                        </svg>
-                        Download Started
-                    `;
-                    setTimeout(restoreDlBtn, 2500);
-                }
+            }).catch(() => {
+                chrome.runtime.sendMessage({
+                    action: 'downloadMedia',
+                    url: videoUrl,
+                    filename: filename
+                }, (response) => {
+                    if (response && response.success) {
+                        dlBtn.innerHTML = `
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="20 6 9 17 4 12"></polyline>
+                            </svg>
+                            Download Started
+                        `;
+                        setTimeout(restoreDlBtn, 2500);
+                    } else {
+                        restoreDlBtn();
+                    }
+                });
             });
         }
     });

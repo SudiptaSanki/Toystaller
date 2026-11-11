@@ -180,34 +180,34 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             }
 
             if (section === 'modal') {
-                return { preferredCorners: ['top-left', 'bottom-left'], padding: 14 };
+                return { preferredCorners: ['top-right', 'bottom-right'], padding: 14 };
             }
             if (section === 'watch') {
-                return { preferredCorners: ['top-left', 'bottom-left'], padding: 16 };
+                return { preferredCorners: ['top-right', 'bottom-right'], padding: 16 };
             }
             if (section === 'stories') {
-                return { preferredCorners: ['top-left', 'bottom-left'], padding: 16, topOffset: 48 };
+                return { preferredCorners: ['top-right', 'bottom-right'], padding: 16, topOffset: 48 };
             }
             if (section === 'feed') {
-                return { preferredCorners: ['top-left', 'top-right', 'bottom-left'], padding: 12 };
+                return { preferredCorners: ['top-right', 'bottom-right'], padding: 12 };
             }
             if (section === 'groups') {
-                return { preferredCorners: ['top-left', 'top-right', 'bottom-left'], padding: 12 };
+                return { preferredCorners: ['top-right', 'bottom-right'], padding: 12 };
             }
             if (section === 'friends') {
-                return { preferredCorners: ['top-right', 'top-left'], padding: 8 };
+                return { preferredCorners: ['top-right', 'bottom-right'], padding: 8 };
             }
             if (section === 'profile_photos' || section === 'photos') {
-                return { preferredCorners: ['top-right', 'top-left', 'bottom-right'], padding: 8 };
+                return { preferredCorners: ['top-right', 'bottom-right'], padding: 8 };
             }
             if (section === 'profile_videos') {
-                return { preferredCorners: ['top-left', 'bottom-left'], padding: 10 };
+                return { preferredCorners: ['top-right', 'bottom-right'], padding: 10 };
             }
             if (section === 'messages') {
-                return { preferredCorners: ['top-left', 'top-right'], padding: 8 };
+                return { preferredCorners: ['top-right', 'bottom-right'], padding: 8 };
             }
 
-            return { preferredCorners: ['top-left', 'bottom-left', 'top-right'], padding: 12 };
+            return { preferredCorners: ['top-right', 'bottom-right'], padding: 12 };
         },
 
         // --- Modal & Theater Mode Detection ---

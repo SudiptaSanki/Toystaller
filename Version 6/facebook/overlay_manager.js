@@ -795,6 +795,9 @@ class OverlayManager {
         }
 
         for (const [media, entry] of this.overlays.entries()) {
+            if (media.isConnected) {
+                entry.corner = this.pickBestCorner(media, media.getBoundingClientRect(), entry.container);
+            }
             this.updatePosition(media, entry.container);
         }
     }

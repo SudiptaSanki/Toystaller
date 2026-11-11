@@ -101,6 +101,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const audioUrls = tabMedia && tabMedia.audio ? Array.from(tabMedia.audio) : [];
         sendResponse({ urls: urls, audioUrls: audioUrls });
     } else if (request.action === 'downloadMedia') {
+        const lower = (request.url || '').toLowerCase();
+        const isHls = lower.includes('.m3u8') || lower.includes('/playlist/') || lower.includes('/hls-') || lower.includes('quality-analysis');
+        if (isHls && request.filename && request.filename.toLowerCase().endsWith('.mp4')) {
+            console.warn("Toystaller: Rejecting saving HLS playlist as MP4 directly");
+            sendResponse({ success: false, error: 'Cannot save adaptive HLS playlist directly as MP4' });
+            return true;
+        }
         const downloadOptions = {
             url: request.url,
             saveAs: true
@@ -208,9 +215,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 targetUrl = fbPlayerUrl;
             } else if (platformLower === 'linkedin' || lowerUrl.includes('licdn.com') || isHlsStream) {
                 // LinkedIn Edition: dedicated player tab with LinkedIn Edition badge, Hls.js, and master MP4 support
-                targetUrl = chrome.runtime.getURL('specialized/linkedin/player.html') + '?url=' + encodeURIComponent(url);
+                let liPlayerUrl = chrome.runtime.getURL('specialized/linkedin/player.html') + '?url=' + encodeURIComponent(url);
+                if (request.progressiveUrl) {
+                    liPlayerUrl += '&progressiveUrl=' + encodeURIComponent(request.progressiveUrl);
+                }
+                targetUrl = liPlayerUrl;
             } else if (request.forcePlayer || isDataUrl) {
-                targetUrl = chrome.runtime.getURL('player.html') + '?url=' + encodeURIComponent(url);
+                let pUrl = chrome.runtime.getURL('player.html') + '?url=' + encodeURIComponent(url);
+                if (request.progressiveUrl) {
+                    pUrl += '&progressiveUrl=' + encodeURIComponent(request.progressiveUrl);
+                }
+                if (request.audioUrl) {
+                    pUrl += '&audioUrl=' + encodeURIComponent(request.audioUrl);
+                }
+                targetUrl = pUrl;
             } else {
                 targetUrl = url;
             }

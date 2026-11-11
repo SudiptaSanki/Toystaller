@@ -113,7 +113,7 @@
                 if (isVideo && (lower.includes('videocover') || lower.includes('/image/') || lower.includes('.jpg') || lower.includes('.png') || lower.includes('.webp'))) {
                     return false;
                 }
-                if (lower.includes('.mpd') || lower.includes('stream_type=dash') || lower.includes('bytestart') || lower.includes('/audio')) {
+                if (lower.includes('.mpd') || lower.includes('stream_type=dash') || lower.includes('bytestart') || lower.includes('/audio') || lower.includes('quality-analysis')) {
                     return false;
                 }
                 return (lower.includes('licdn.com') && (lower.includes('playlist/vid') || lower.includes('video') || lower.includes('playback') || lower.includes('progressive') || lower.includes('.m3u8'))) || lower.includes('.mp4');
@@ -156,8 +156,8 @@
                 return false;
             }
 
-            // Reject DASH manifests, HLS playlists, segments, and audio tracks that cause 0:00 video playback
-            if (lowerVal.includes('.mpd') || lowerVal.includes('.m3u8') || lowerVal.includes('stream_type=dash') || lowerVal.includes('/manifest') || lowerVal.includes('bytestart') || lowerVal.includes('/audio') || lowerKey.includes('audio')) {
+            // Reject DASH manifests, HLS playlists, segments, quality analysis probes, and audio tracks that cause 0:00 video playback
+            if (lowerVal.includes('.mpd') || lowerVal.includes('.m3u8') || lowerVal.includes('stream_type=dash') || lowerVal.includes('/manifest') || lowerVal.includes('bytestart') || lowerVal.includes('/audio') || lowerKey.includes('audio') || lowerVal.includes('quality-analysis')) {
                 return false;
             }
 
@@ -180,7 +180,7 @@
                     if (!stream) continue;
                     const streamUrl = stream.streamingLocation || stream.url || stream.src;
                     if (!streamUrl || typeof streamUrl !== 'string' || !streamUrl.startsWith('http')) continue;
-                    if (streamUrl.includes('manifest') || streamUrl.includes('.mpd') || streamUrl.includes('.m3u8')) continue;
+                    if (streamUrl.includes('manifest') || streamUrl.includes('.mpd') || streamUrl.includes('.m3u8') || streamUrl.includes('quality-analysis')) continue;
 
                     const bitrate = parseInt(stream.bitRate || stream.bitrate || '0', 10);
                     const height = parseInt(stream.height || '0', 10);
@@ -196,19 +196,19 @@
 
             // 2. Direct progressive stream object with streamingLocation
             if (typeof val.streamingLocation === 'string' && val.streamingLocation.startsWith('http')) {
-                if (!val.streamingLocation.includes('manifest') && !val.streamingLocation.includes('.mpd') && !val.streamingLocation.includes('.m3u8')) {
+                if (!val.streamingLocation.includes('manifest') && !val.streamingLocation.includes('.mpd') && !val.streamingLocation.includes('.m3u8') && !val.streamingLocation.includes('quality-analysis')) {
                     return val.streamingLocation.split('#')[0];
                 }
             }
 
             // 3. streamingUrl or progressiveUrl
             if (typeof val.streamingUrl === 'string' && val.streamingUrl.startsWith('http')) {
-                if (!val.streamingUrl.includes('manifest') && !val.streamingUrl.includes('.mpd') && !val.streamingUrl.includes('.m3u8')) {
+                if (!val.streamingUrl.includes('manifest') && !val.streamingUrl.includes('.mpd') && !val.streamingUrl.includes('.m3u8') && !val.streamingUrl.includes('quality-analysis')) {
                     return val.streamingUrl.split('#')[0];
                 }
             }
             if (typeof val.progressiveUrl === 'string' && val.progressiveUrl.startsWith('http')) {
-                if (!val.progressiveUrl.includes('manifest') && !val.progressiveUrl.includes('.mpd') && !val.progressiveUrl.includes('.m3u8')) {
+                if (!val.progressiveUrl.includes('manifest') && !val.progressiveUrl.includes('.mpd') && !val.progressiveUrl.includes('.m3u8') && !val.progressiveUrl.includes('quality-analysis')) {
                     return val.progressiveUrl.split('#')[0];
                 }
             }
@@ -219,7 +219,7 @@
         isValidVideo(url) {
             if (!url || typeof url !== 'string' || !url.startsWith('http')) return false;
             const lower = url.toLowerCase();
-            if (lower.includes('.mpd')) return false;
+            if (lower.includes('.mpd') || lower.includes('quality-analysis')) return false;
             if (lower.includes('/audio') || lower.includes('bytestart')) return false;
             return !(lower.includes('//www.linkedin.com') || lower.includes('//linkedin.com'));
         },
@@ -252,8 +252,10 @@
                 try {
                     const sources = typeof sourcesData === 'string' ? JSON.parse(sourcesData) : sourcesData;
                     if (Array.isArray(sources)) {
-                        let bestCandidate = null;
-                        let maxScore = -1;
+                        let bestMp4 = null;
+                        let maxMp4Score = -1;
+                        let bestHls = null;
+                        let maxHlsScore = -1;
 
                         const scoreSource = (src, srcUrl) => {
                             let score = 0;
@@ -271,9 +273,6 @@
                             const br = parseInt(src['data-bitrate'] || src.bitRate || src.bitrate || 0, 10);
                             if (br) score += br;
 
-                            const isMp4 = (src.type && src.type.includes('mp4')) || lower.includes('.mp4');
-                            if (isMp4) score += 500000; // Progressive MP4 preferred for instant buffering
-
                             return score;
                         };
 
@@ -281,17 +280,42 @@
                             if (!src) continue;
                             const srcUrl = src.src || src.url || src.streamingLocation;
                             if (srcUrl && typeof srcUrl === 'string' && this.isValidVideo(srcUrl)) {
-                                if (srcUrl.includes('.mpd') || srcUrl.includes('/audio')) continue;
+                                if (srcUrl.includes('.mpd') || srcUrl.includes('/audio') || srcUrl.includes('quality-analysis')) continue;
                                 if (src.type && src.type.includes('dash')) continue;
 
+                                const lower = srcUrl.toLowerCase();
+                                const isMp4 = (src.type && src.type.includes('mp4')) || 
+                                              lower.includes('.mp4') || 
+                                              lower.includes('/mp4-') || 
+                                              lower.includes('format=mp4') ||
+                                              lower.includes('.m4v');
+
+                                const isHls = (src.type && src.type.includes('mpegurl')) || 
+                                              lower.includes('.m3u8') || 
+                                              lower.includes('/hls-') || 
+                                              lower.includes('/hls/');
+
                                 const s = scoreSource(src, srcUrl);
-                                if (s > maxScore || !bestCandidate) {
-                                    maxScore = s;
-                                    bestCandidate = srcUrl;
+
+                                if (isMp4) {
+                                    if (s > maxMp4Score || !bestMp4) {
+                                        maxMp4Score = s;
+                                        bestMp4 = srcUrl;
+                                    }
+                                } else {
+                                    if (s > maxHlsScore || !bestHls) {
+                                        maxHlsScore = s;
+                                        bestHls = srcUrl;
+                                    }
                                 }
                             }
                         }
-                        if (bestCandidate) return bestCandidate.split('#')[0];
+
+                        // Always prefer progressive MP4 for direct instant playback & 100% reliable downloads
+                        const chosen = bestMp4 || bestHls;
+                        if (chosen) {
+                            return chosen.split('#')[0];
+                        }
                     }
                 } catch (e) {}
             }
@@ -310,6 +334,12 @@
             }
 
             return null;
+        },
+
+        extractVideoInfoFromDOM(el) {
+            const url = this.extractVideoUrlFromDOM(el);
+            if (!url) return null;
+            return { url: url, progressiveUrl: url };
         }
     };
 

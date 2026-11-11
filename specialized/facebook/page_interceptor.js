@@ -542,9 +542,21 @@
                 }
             }
 
-            // 3. If el didn't find video, check if there's a child or active viewport video
-            if (!url) {
-                const activeVid = (el && el.querySelector && el.querySelector('video')) || findActiveViewportVideo();
+            // 3. If el didn't find video, check if there's a child video
+            if (!url && el && el.querySelector) {
+                const childVid = el.querySelector('video');
+                if (childVid) {
+                    const fiberRes = extractVideoUrlFromFiberTree(childVid);
+                    if (fiberRes) {
+                        url = fiberRes.url;
+                        audioUrl = fiberRes.audioUrl || null;
+                    }
+                }
+            }
+
+            // 4. On dedicated single-video views (like /reel/ or /watch/), allow active viewport fallback
+            if (!url && (window.location.pathname.includes('/reel/') || window.location.pathname.includes('/watch/'))) {
+                const activeVid = findActiveViewportVideo();
                 if (activeVid) {
                     const fiberRes = extractVideoUrlFromFiberTree(activeVid);
                     if (fiberRes) {

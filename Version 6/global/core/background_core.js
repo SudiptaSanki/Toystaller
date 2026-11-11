@@ -41,6 +41,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const urls = tabMedia && tabMedia[mediaType] ? Array.from(tabMedia[mediaType]) : [];
         sendResponse({ urls: urls });
     } else if (request.action === 'downloadMedia') {
+        const lower = (request.url || '').toLowerCase();
+        const isHls = lower.includes('.m3u8') || lower.includes('/playlist/') || lower.includes('/hls-') || lower.includes('quality-analysis');
+        if (isHls && request.filename && request.filename.toLowerCase().endsWith('.mp4')) {
+            console.warn("Toystaller: Rejecting saving HLS playlist as MP4 directly");
+            sendResponse({ success: false, error: 'Cannot save adaptive HLS playlist directly as MP4' });
+            return true;
+        }
         chrome.downloads.download({
             url: request.url,
             saveAs: true
@@ -89,6 +96,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             (platform ? '&platform=' + encodeURIComponent(platform) : '');
         if (request.audioUrl) {
             playerUrl += '&audioUrl=' + encodeURIComponent(request.audioUrl);
+        }
+        if (request.progressiveUrl) {
+            playerUrl += '&progressiveUrl=' + encodeURIComponent(request.progressiveUrl);
         }
         
         const targetUrl = shouldUsePlayer ? playerUrl : url;

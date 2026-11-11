@@ -72,21 +72,58 @@ window.ToystallerPlatforms['generic'] = {
     },
     
     extractPriorityReactUrl(val, isVideoContext) {
-        if (val && typeof val.streamingUrl === 'string') {
-            let suffix = '#video.mp4';
-            if (val.height) suffix = `#_q=${val.height}p_video.mp4`;
-            return val.streamingUrl + suffix;
+        if (!val || typeof val !== 'object') return null;
+
+        // Check variant list (sources, representations, video_versions)
+        const variants = val.sources || val.video_versions || val.representations || val.qualities;
+        if (Array.isArray(variants) && variants.length > 0) {
+            let best = null;
+            let bestScore = -1;
+            for (const item of variants) {
+                if (!item) continue;
+                const itemUrl = item.url || item.src || item.streamingLocation;
+                if (!itemUrl || typeof itemUrl !== 'string') continue;
+                const lower = itemUrl.toLowerCase();
+                if (lower.includes('/audio') || lower.includes('.mpd')) continue;
+
+                const w = parseInt(item.width || item['data-width'] || 0, 10);
+                const h = parseInt(item.height || item['data-height'] || 0, 10);
+                const br = parseInt(item.bitrate || item.bitRate || item['data-bitrate'] || 0, 10);
+                const score = (w * h) || br || (lower.includes('1080') ? 1080 : lower.includes('720') ? 720 : 0);
+                if (score > bestScore || !best) {
+                    bestScore = score;
+                    best = itemUrl;
+                }
+            }
+            if (best) return best.split('#')[0];
         }
-        if (val && typeof val.progressiveUrl === 'string') {
-            let suffix = '#video.mp4';
-            if (val.height) suffix = `#_q=${val.height}p_video.mp4`;
-            return val.progressiveUrl + suffix;
+
+        if (typeof val.streamingUrl === 'string') {
+            return val.streamingUrl.split('#')[0];
+        }
+        if (typeof val.progressiveUrl === 'string') {
+            return val.progressiveUrl.split('#')[0];
+        }
+        if (typeof val.videoUrl === 'string') {
+            return val.videoUrl.split('#')[0];
+        }
+        if (typeof val.downloadUrl === 'string') {
+            return val.downloadUrl.split('#')[0];
         }
         return null;
     },
 
     // Background Script filtering (content_script.js fallback)
     filterBackgroundUrls(candidates, isVideo) {
-        return candidates;
+        if (!candidates || !Array.isArray(candidates)) return [];
+        return candidates.filter(u => {
+            if (!u || typeof u !== 'string') return false;
+            const lower = u.toLowerCase();
+            if (isVideo) {
+                if (lower.includes('/image/') || lower.includes('.jpg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('/audio') || lower.includes('mime=audio')) return false;
+                return lower.includes('.mp4') || lower.includes('.webm') || lower.includes('.m4v') || lower.includes('.m3u8') || lower.includes('/video/');
+            }
+            return lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('.svg');
+        });
     }
 };

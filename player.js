@@ -29,15 +29,24 @@
     const loaderSubText = document.getElementById('loaderSubText');
     const retryBtn = document.getElementById('retryBtn');
 
+    let loaderHideTimeout = null;
     function hidePlayerLoader() {
         if (playerLoader) {
+            if (loaderHideTimeout) clearTimeout(loaderHideTimeout);
             playerLoader.style.opacity = '0';
-            setTimeout(() => { playerLoader.style.display = 'none'; }, 250);
+            loaderHideTimeout = setTimeout(() => { 
+                playerLoader.style.display = 'none'; 
+                loaderHideTimeout = null;
+            }, 250);
         }
     }
 
     function showPlayerLoader(title, sub, showRetry = false) {
         if (playerLoader) {
+            if (loaderHideTimeout) {
+                clearTimeout(loaderHideTimeout);
+                loaderHideTimeout = null;
+            }
             playerLoader.style.display = 'flex';
             playerLoader.style.opacity = '1';
             if (loaderTitle && title) loaderTitle.textContent = title;
@@ -53,6 +62,7 @@
     }
 
     let activeDownloadUrl = rawUrl ? rawUrl.split('#')[0] : null;
+    let activeProgressiveUrl = params.get('progressiveUrl') ? params.get('progressiveUrl').split('#')[0] : null;
     let activeAudioUrl = params.get('audioUrl') ? params.get('audioUrl').split('#')[0] : null;
     let activeMutedUrl = params.get('mutedUrl') ? params.get('mutedUrl').split('#')[0] : null;
     let activeFilename = `Toystaller_Media_${Date.now()}`;
@@ -190,6 +200,10 @@
             const probeRes = await fetch(url, {
                 headers: { 'Range': 'bytes=0-0' }
             });
+            const contentType = (probeRes.headers.get('content-type') || '').toLowerCase();
+            if (contentType.includes('mpegurl') || contentType.includes('application/x-mpegurl') || contentType.includes('text/plain') || contentType.includes('text/html')) {
+                throw new Error('Target URL returned a playlist or web page instead of a video stream');
+            }
             if (probeRes.status === 206) {
                 supportsRange = true;
                 const cr = probeRes.headers.get('Content-Range');
@@ -434,6 +448,9 @@
                 lowerClean.includes('application/x-mpegurl') || 
                 lowerClean.includes('/manifest/') ||
                 lowerClean.includes('/m3u8') ||
+                lowerClean.includes('/hls-') ||
+                lowerClean.includes('/hls/') ||
+                lowerClean.includes('quality-analysis') ||
                 (lowerClean.includes('/pl/') && !lowerClean.includes('/mp4'))
             );
 
@@ -472,8 +489,13 @@
                     }
                 });
 
+                let directErrorTriedHls = false;
                 videoPlayer.addEventListener('error', () => {
-                    if (window.Hls && Hls.isSupported() && !hlsInstance) {
+                    if (isHls && hlsInstance) {
+                        return;
+                    }
+                    if (window.Hls && Hls.isSupported() && !directErrorTriedHls && !isHls) {
+                        directErrorTriedHls = true;
                         console.log("Direct playback error, trying Hls.js fallback:", cleanUrl);
                         startHlsPlayback();
                     } else {
@@ -521,10 +543,19 @@
                 hlsInstance.on(Hls.Events.ERROR, (event, data) => {
                     if (data.fatal) {
                         if (data.details === Hls.ErrorDetails.MANIFEST_PARSING_ERROR || data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) {
-                            console.warn("Hls stream parsing failed, falling back to direct MP4 stream:", cleanUrl);
                             hlsInstance.destroy();
                             hlsInstance = null;
-                            startDirectPlayback();
+                            if (activeProgressiveUrl && activeProgressiveUrl !== cleanUrl) {
+                                console.warn("Hls stream parsing failed, falling back to progressive MP4 stream:", activeProgressiveUrl);
+                                cleanUrl = activeProgressiveUrl;
+                                isHls = false;
+                                startDirectPlayback();
+                                return;
+                            }
+                            clearTimeout(bufferTimeout);
+                            showPlayerLoader('Stream Not Compatible', 'This video uses an unsupported adaptive stream. Please play the video on the original site to load the direct MP4 stream.', false);
+                            resText.textContent = 'Stream could not be played directly.';
+                            resText.style.color = '#ef4444';
                             return;
                         }
                         switch (data.type) {
@@ -611,15 +642,21 @@
                 dlBtn.textContent = 'Download Complete!';
                 setTimeout(restoreDlBtn, 2500);
             }).catch((err) => {
-                console.warn('HLS client assembly fallback:', err);
-                chrome.runtime.sendMessage({
-                    action: 'downloadMedia',
-                    url: activeDownloadUrl,
-                    filename: activeFilename
-                }, () => {
-                    dlBtn.textContent = 'Download Started';
-                    setTimeout(restoreDlBtn, 2500);
-                });
+                console.warn('HLS client assembly failed:', err);
+                if (activeProgressiveUrl) {
+                    console.log('Downloading progressive MP4 fallback:', activeProgressiveUrl);
+                    chrome.runtime.sendMessage({
+                        action: 'downloadMedia',
+                        url: activeProgressiveUrl,
+                        filename: activeFilename
+                    }, () => {
+                        dlBtn.textContent = 'Download Started';
+                        setTimeout(restoreDlBtn, 2500);
+                    });
+                } else {
+                    restoreDlBtn();
+                    alert('This stream is an adaptive HLS playlist that cannot be downloaded directly as a single MP4. Please play the video on the original page to load the direct progressive MP4 stream.');
+                }
             });
         } else {
             dlBtn.textContent = 'Starting download...';

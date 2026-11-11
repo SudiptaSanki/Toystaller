@@ -539,17 +539,26 @@ function injectDownloadButtons() {
                             platform: platformName 
                         });
                     } else {
-                        if (openBtn.__resolvedVideoUrl) {
+                        const currentId = platform.extractVideoId ? platform.extractVideoId(media) : null;
+                        if (currentId && openBtn.__resolvedVideoId === currentId && openBtn.__resolvedVideoUrl) {
                             safeSendMessage({ 
                                 action: 'openInNewTab', 
                                 url: openBtn.__resolvedVideoUrl, 
                                 audioUrl: openBtn.__resolvedAudioUrl || null,
                                 mutedUrl: openBtn.__resolvedMutedUrl || null,
+                                progressiveUrl: openBtn.__resolvedProgressiveUrl || null,
                                 isVideo: true, 
                                 platform: platformName 
                             });
                             return;
                         }
+
+                        // Clear mismatched or stale cache
+                        delete openBtn.__resolvedVideoUrl;
+                        delete openBtn.__resolvedVideoId;
+                        delete openBtn.__resolvedAudioUrl;
+                        delete openBtn.__resolvedMutedUrl;
+                        delete openBtn.__resolvedProgressiveUrl;
 
                         openBtn.style.opacity = '1';
                         openBtn.style.backgroundColor = 'rgba(52, 152, 219, 0.95)';
@@ -557,7 +566,7 @@ function injectDownloadButtons() {
                         openBtn.innerHTML = `<svg width="${iconSize}" height="${iconSize}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:toystaller-spin 0.8s linear infinite;"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10"></path></svg>`;
                         showToystallerToast('Fetching Best HD Video Quality...', 5000, false);
 
-                        getMediaUrl((url, audioUrl, mutedUrl) => {
+                        getMediaUrl((url, audioUrl, mutedUrl, progressiveUrl) => {
                             openBtn.style.opacity = '0.55';
                             openBtn.style.backgroundColor = 'rgba(30,30,30,0.75)';
                             openBtn.innerHTML = origSvg;
@@ -568,12 +577,15 @@ function injectDownloadButtons() {
                             openBtn.__resolvedVideoUrl = url;
                             openBtn.__resolvedAudioUrl = audioUrl || null;
                             openBtn.__resolvedMutedUrl = mutedUrl || null;
+                            openBtn.__resolvedProgressiveUrl = progressiveUrl || null;
+                            openBtn.__resolvedVideoId = currentId;
                             showToystallerToast('Opening Master HD Player...', 2000, true);
                             safeSendMessage({ 
                                 action: 'openInNewTab', 
                                 url: url, 
                                 audioUrl: audioUrl || null,
                                 mutedUrl: mutedUrl || null,
+                                progressiveUrl: progressiveUrl || null,
                                 isVideo: true, 
                                 platform: platformName 
                             });
@@ -702,13 +714,15 @@ function injectDownloadButtons() {
                     // Step 1: Check platform DOM extraction first (e.g. LinkedIn data-sources)
                     if (platform.extractVideoUrlFromDOM) {
                         const domUrl = platform.extractVideoUrlFromDOM(media);
-                        if (domUrl && (platform.isValidVideo ? platform.isValidVideo(domUrl) : true)) {
-                            const cleanDom = domUrl.split('#')[0];
+                        const actualUrl = (typeof domUrl === 'object' && domUrl.url) ? domUrl.url : domUrl;
+                        const actualProgressive = (typeof domUrl === 'object' && domUrl.progressiveUrl) ? domUrl.progressiveUrl : null;
+                        if (actualUrl && (platform.isValidVideo ? platform.isValidVideo(actualUrl) : true)) {
+                            const cleanDom = actualUrl.split('#')[0];
                             let domAudio = null;
                             let domMuted = null;
                             if (platform.extractAudioUrlFromDOM) domAudio = platform.extractAudioUrlFromDOM(media);
                             if (platform.extractDashVideoFromDOM) domMuted = platform.extractDashVideoFromDOM(media);
-                            callback(cleanDom, domAudio, domMuted);
+                            callback(cleanDom, domAudio, domMuted, actualProgressive);
                             return;
                         }
                     }
@@ -754,8 +768,10 @@ function injectDownloadButtons() {
                 // 1. Direct DOM check again
                 if (isVideo && platform.extractVideoUrlFromDOM) {
                     const domUrl = platform.extractVideoUrlFromDOM(media);
-                    if (domUrl && (platform.isValidVideo ? platform.isValidVideo(domUrl) : true)) {
-                        callback(domUrl.split('#')[0], null, null);
+                    const actualUrl = (typeof domUrl === 'object' && domUrl.url) ? domUrl.url : domUrl;
+                    const actualProgressive = (typeof domUrl === 'object' && domUrl.progressiveUrl) ? domUrl.progressiveUrl : null;
+                    if (actualUrl && (platform.isValidVideo ? platform.isValidVideo(actualUrl) : true)) {
+                        callback(actualUrl.split('#')[0], null, null, actualProgressive);
                         return;
                     }
                 }

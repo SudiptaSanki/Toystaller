@@ -92,14 +92,17 @@ function showToystallerToast(text, duration = 3000, isSuccess = false) {
 function scoreVideoUrl(url) {
     let score = 0;
     const lower = url.toLowerCase();
+    if (lower.includes('quality-analysis')) score -= 20000;
     if (lower.includes('/audio') || lower.includes('audio')) score -= 1000;
-    if (lower.includes('.mp4') || lower.includes('.m4v')) score += 50; // Progressive MP4 preferred
-    if (lower.includes('playlist/vid')) score += 20; // HLS / playlist stream
+    const isMp4 = lower.includes('.mp4') || lower.includes('/mp4-') || lower.includes('format=mp4') || lower.includes('.m4v');
+    if (isMp4) score += 10000; // Progressive MP4 heavily preferred
+    if (lower.includes('playlist/vid') && !lower.includes('quality-analysis')) score += 20; // HLS / playlist stream
     if (lower.includes('.mpd') || lower.includes('/manifest/') || lower.includes('stream_type=dash')) score -= 50;
     if (lower.includes('bytestart') || lower.includes('byteend')) score -= 50;
 
     if (lower.includes('1080')) score += 20;
     else if (lower.includes('720')) score += 10;
+    else if (lower.includes('640')) score += 8;
     else if (lower.includes('480')) score += 5;
     else if (lower.includes('360')) score += 2;
 
@@ -115,6 +118,7 @@ function pickBestVideoUrl(urls) {
     if (!urls || urls.length === 0) return null;
     let playable = urls.filter(u => {
         const lower = u.toLowerCase();
+        if (lower.includes('quality-analysis')) return false;
         if (lower.includes('bytestart') || lower.includes('byteend')) return false;
         if (lower.includes('videocover') || lower.includes('/image/') || lower.includes('.jpg') || lower.includes('.png') || lower.includes('.webp')) return false;
         if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('stream_type=dash') || lower.includes('manifest')) return false;
@@ -279,7 +283,13 @@ function injectDownloadButtons() {
                     } else {
                         // Video: resolve fresh URL and open in dedicated LinkedIn player tab
                         if (openBtn.__resolvedVideoUrl) {
-                            safeSendMessage({ action: 'openInNewTab', url: openBtn.__resolvedVideoUrl, isVideo: true, platform: 'linkedin' });
+                            safeSendMessage({ 
+                                action: 'openInNewTab', 
+                                url: openBtn.__resolvedVideoUrl, 
+                                progressiveUrl: openBtn.__resolvedProgressiveUrl || null,
+                                isVideo: true, 
+                                platform: 'linkedin' 
+                            });
                             return;
                         }
 
@@ -289,14 +299,21 @@ function injectDownloadButtons() {
                         openBtn.innerHTML = `<svg width="${iconSize}" height="${iconSize}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:toystaller-spin 0.8s linear infinite;"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10"></path></svg>`;
                         showToystallerToast('Fetching Best HD Video Quality...', 5000, false);
 
-                        getMediaUrl((url) => {
+                        getMediaUrl((url, progressiveUrl = null) => {
                             openBtn.style.opacity = '0.55';
                             openBtn.style.backgroundColor = 'rgba(30,30,30,0.75)';
                             openBtn.innerHTML = origSvg;
                             if (url) {
                                 openBtn.__resolvedVideoUrl = url;
+                                openBtn.__resolvedProgressiveUrl = progressiveUrl;
                                 showToystallerToast('Opening Master HD Player...', 2000, true);
-                                safeSendMessage({ action: 'openInNewTab', url: url, isVideo: true, platform: 'linkedin' });
+                                safeSendMessage({ 
+                                    action: 'openInNewTab', 
+                                    url: url, 
+                                    progressiveUrl: progressiveUrl || null,
+                                    isVideo: true, 
+                                    platform: 'linkedin' 
+                                });
                             } else {
                                 showToystallerToast('Could not resolve video URL. Please start playing video and retry.', 4000, false);
                             }
@@ -404,9 +421,13 @@ function injectDownloadButtons() {
                 if (isVideo) {
                     // 1. Try DOM extraction first (LinkedIn provides progressive MP4s directly in data-sources)
                     if (platform.extractVideoUrlFromDOM) {
-                        const domUrl = platform.extractVideoUrlFromDOM(media);
-                        if (domUrl) {
-                            callback(domUrl.split('#')[0]);
+                        const domRes = platform.extractVideoUrlFromDOM(media);
+                        if (domRes) {
+                            if (typeof domRes === 'object') {
+                                callback(domRes.url.split('#')[0], domRes.progressiveUrl ? domRes.progressiveUrl.split('#')[0] : null);
+                            } else {
+                                callback(domRes.split('#')[0], null);
+                            }
                             return;
                         }
                     }
@@ -419,7 +440,7 @@ function injectDownloadButtons() {
                         resolved = true;
                         window.removeEventListener('message', handler);
                         if (e.data.url) {
-                            callback(e.data.url.split('#')[0]);
+                            callback(e.data.url.split('#')[0], null);
                         } else {
                             getMediaUrlFallback(callback, silent);
                         }
@@ -442,9 +463,13 @@ function injectDownloadButtons() {
             const getMediaUrlFallback = (callback, silent = false) => {
                 // Priority check: DOM sources attribute on/around media
                 if (isVideo && platform.extractVideoUrlFromDOM) {
-                    const domUrl = platform.extractVideoUrlFromDOM(media);
-                    if (domUrl) {
-                        callback(domUrl.split('#')[0]);
+                    const domRes = platform.extractVideoUrlFromDOM(media);
+                    if (domRes) {
+                        if (typeof domRes === 'object') {
+                            callback(domRes.url.split('#')[0], domRes.progressiveUrl ? domRes.progressiveUrl.split('#')[0] : null);
+                        } else {
+                            callback(domRes.split('#')[0], null);
+                        }
                         return;
                     }
                 }
