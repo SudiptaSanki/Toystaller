@@ -60,6 +60,18 @@ window.addEventListener('message', (e) => {
                 pageInterceptedVideoUrls.add(url);
             }
         });
+    } else if (e.data && e.data.type === 'toystaller_url_changed') {
+        // User scrolled to another Reel or navigated via SPA!
+        // Clear all cached resolutions on open buttons so each button maps to the active video
+        document.querySelectorAll('.magic-open-btn').forEach(btn => {
+            delete btn.__resolvedVideoUrl;
+            delete btn.__resolvedVideoId;
+            delete btn.__resolvedAudioUrl;
+        });
+        if (window.magicOverlayManager) {
+            window.magicOverlayManager.updateAllPositions();
+        }
+        setTimeout(injectDownloadButtons, 120);
     }
 });
 
@@ -336,7 +348,7 @@ function injectDownloadButtons() {
                                 safeSendMessage({ 
                                     action: 'openInNewTab', 
                                     url: clean, 
-                                    audioUrl: audioUrl,
+                                    audioUrl: audioUrl ? cleanVideoUrl(audioUrl) : null,
                                     isVideo: true, 
                                     platform: 'facebook' 
                                 });
@@ -345,9 +357,27 @@ function injectDownloadButtons() {
                             }
                         };
 
-                        // Always resolve fresh video URL directly from the active media element's React Fiber.
-                        // Never lock to a stale pre-resolved URL when scrolling through Facebook Reels / Feed!
-                        getMediaUrl(openVideo);
+                        const currentId = platform.extractVideoId ? platform.extractVideoId(media) : null;
+
+                        // Check if cached video resolution matches the currently active video/reel
+                        if (openBtn.__resolvedVideoUrl && isValidVideoUrl(openBtn.__resolvedVideoUrl)) {
+                            if (openBtn.__resolvedVideoId && currentId && openBtn.__resolvedVideoId !== currentId) {
+                                // User scrolled to a new reel or video! Clear stale cache
+                                delete openBtn.__resolvedVideoUrl;
+                                delete openBtn.__resolvedVideoId;
+                                delete openBtn.__resolvedAudioUrl;
+                            } else {
+                                openVideo(openBtn.__resolvedVideoUrl, openBtn.__resolvedAudioUrl || null);
+                                return;
+                            }
+                        }
+
+                        // Fresh resolution for this specific video
+                        openBtn.style.opacity = '0.35';
+                        getMediaUrl((url, audioUrl = null) => {
+                            openBtn.style.opacity = '1';
+                            openVideo(url, audioUrl);
+                        }, false, currentId);
                     }
                 });
                 buttons.push(openBtn);
@@ -426,18 +456,22 @@ function injectDownloadButtons() {
             // Pre-resolve video URL to conditionally show/hide the blue button
             const preResolveVideoUrl = (openBtn) => {
                 if (!isVideo) return;
-                getMediaUrl((url) => {
+                const currentId = platform.extractVideoId ? platform.extractVideoId(media) : null;
+                getMediaUrl((url, audioUrl = null) => {
                     const clean = cleanVideoUrl(url);
                     if (clean && isValidVideoUrl(clean)) {
                         openBtn.__resolvedVideoUrl = clean;
+                        openBtn.__resolvedAudioUrl = audioUrl ? cleanVideoUrl(audioUrl) : null;
+                        openBtn.__resolvedVideoId = currentId;
                         openBtn.style.display = 'flex';
                     }
-                }, true);
+                }, true, currentId);
             };
 
-            const getMediaUrl = (callback, silent = false) => {
+            const getMediaUrl = (callback, silent = false, videoId = null) => {
                 if (isVideo) {
                     let resolved = false;
+                    const currentId = videoId || (platform.extractVideoId ? platform.extractVideoId(media) : null);
                     const handler = (e) => {
                         if (!e.data || e.data.type !== 'magic_response_react_url_' + magicId) return;
                         if (resolved) return;
@@ -447,34 +481,61 @@ function injectDownloadButtons() {
                         if (clean && isValidVideoUrl(clean)) {
                             callback(clean, e.data.audioUrl ? cleanVideoUrl(e.data.audioUrl) : null);
                         } else {
-                            getMediaUrlFallback(callback, silent);
+                            getMediaUrlFallback(callback, silent, currentId);
                         }
                     };
                     window.addEventListener('message', handler);
-                    window.postMessage({ type: 'magic_get_react_url', id: magicId, isVideo: isVideo }, '*');
+                    window.postMessage({ type: 'magic_get_react_url', id: magicId, isVideo: isVideo, videoId: currentId }, '*');
 
                     setTimeout(() => {
                         if (resolved) return;
                         resolved = true;
                         window.removeEventListener('message', handler);
-                        getMediaUrlFallback(callback, silent);
-                    }, 400);
+                        getMediaUrlFallback(callback, silent, currentId);
+                    }, 500);
                     return;
                 }
 
-                getMediaUrlFallback(callback, silent);
+                getMediaUrlFallback(callback, silent, null);
             };
 
-            const getMediaUrlFallback = (callback, silent = false) => {
-                // Check if on dedicated Reel or Watch route or video card with link
-                const card = media.closest ? media.closest('article, div[data-pagelet*="Reel"], a[href*="/reel/"], div[role="article"]') : null;
-                const linkEl = card ? card.querySelector('a[href*="/reel/"], a[href*="/videos/"], a[href*="watch?v="]') : null;
-                const linkUrl = linkEl ? linkEl.href : window.location.href;
-                const idMatch = linkUrl.match(/(?:videos\/|watch\/?\?v=|reel\/)(\d+)/);
-                const targetVideoId = idMatch ? idMatch[1] : null;
+            const getMediaUrlFallback = (callback, silent = false, videoId = null) => {
+                const currentId = videoId || (platform.extractVideoId ? platform.extractVideoId(media) : null);
 
-                if (isVideo && (targetVideoId || window.location.pathname.startsWith('/reel/') || window.location.pathname.startsWith('/watch'))) {
-                    safeSendMessage({ action: 'fetchMobileFacebookVideo', url: linkUrl, videoId: targetVideoId }, (resp) => {
+                // 1. Direct scan of document <script> tags strictly matching currentId
+                if (isVideo && currentId) {
+                    const scripts = document.querySelectorAll('script[type="application/json"], script:not([src])');
+                    const scriptCandidates = [];
+                    for (const s of scripts) {
+                        const text = s.textContent;
+                        if (text && text.includes(currentId)) {
+                            const cdnRegex = /"(https:(?:\\\/\\\/|\/\/)[^"]+?(?:fbcdn\.net|fbsbx\.com)[^"]+?\.(?:mp4|m4v)[^"]*)"/g;
+                            let m;
+                            while ((m = cdnRegex.exec(text)) !== null) {
+                                try {
+                                    const u = cleanVideoUrl(JSON.parse('"' + m[1] + '"'));
+                                    if (u && isValidVideoUrl(u)) scriptCandidates.push(u);
+                                } catch(e) {
+                                    const u = cleanVideoUrl(m[1]);
+                                    if (u && isValidVideoUrl(u)) scriptCandidates.push(u);
+                                }
+                            }
+                        }
+                    }
+                    if (scriptCandidates.length > 0) {
+                        const best = pickBestVideoUrl(scriptCandidates);
+                        if (best && isValidVideoUrl(best)) {
+                            callback(best, null);
+                            return;
+                        }
+                    }
+                }
+
+                // 2. Dedicated single-video Reel / Watch mobile fallback
+                const totalVideos = document.querySelectorAll('video').length;
+                if (isVideo && totalVideos <= 1 && currentId) {
+                    const targetUrl = window.location.href.includes(currentId) ? window.location.href : `https://www.facebook.com/reel/${currentId}`;
+                    safeSendMessage({ action: 'fetchMobileFacebookVideo', url: targetUrl, videoId: currentId }, (resp) => {
                         if (resp && resp.url) {
                             const clean = cleanVideoUrl(resp.url);
                             if (clean && isValidVideoUrl(clean)) {
@@ -490,8 +551,8 @@ function injectDownloadButtons() {
                 fallbackToNetwork();
 
                 function fallbackToNetwork() {
-                    // 1. Check in-memory intercepted video URLs from fetch/XHR
-                    if (isVideo && pageInterceptedVideoUrls.size > 0) {
+                    // Only check page-wide intercepted URLs if there is a SINGLE video on the entire page
+                    if (isVideo && totalVideos <= 1 && pageInterceptedVideoUrls.size > 0) {
                         const platform = PlatformManager.getPlatform();
                         const cleaned = Array.from(pageInterceptedVideoUrls).map(cleanVideoUrl).filter(Boolean);
                         const candidates = cleaned.filter(isValidVideoUrl);
@@ -506,52 +567,30 @@ function injectDownloadButtons() {
                         }
                     }
 
-                    // 2. Direct scan of document <script> tags from content script context
-                    if (isVideo) {
-                        const scripts = document.querySelectorAll('script[type="application/json"], script:not([src])');
-                        const scriptCandidates = [];
-                        const cdnRegex = /"(https:(?:\\\/\\\/|\/\/)[^"]+?(?:fbcdn\.net|fbsbx\.com)[^"]+?\.(?:mp4|m4v)[^"]*)"/g;
-                        for (const s of scripts) {
-                            const text = s.textContent;
-                            if (!text || (!text.includes('fbcdn.net') && !text.includes('fbsbx.com') && !text.includes('playable_url'))) continue;
-                            let m;
-                            while ((m = cdnRegex.exec(text)) !== null) {
-                                try {
-                                    const u = cleanVideoUrl(JSON.parse('"' + m[1] + '"'));
-                                    if (u && isValidVideoUrl(u)) scriptCandidates.push(u);
-                                } catch(e) {
-                                    const unescaped = cleanVideoUrl(m[1]);
-                                    if (unescaped && isValidVideoUrl(unescaped)) scriptCandidates.push(unescaped);
+                    // Fallback to background script webRequest (only for single-video pages)
+                    if (totalVideos <= 1) {
+                        const mediaType = isVideo ? 'video' : 'img';
+                        safeSendMessage({ action: 'getMediaUrls', mediaType: mediaType }, (response) => {
+                            if (response && response.urls && response.urls.length > 0) {
+                                const cleaned = response.urls.map(cleanVideoUrl).filter(Boolean);
+                                const candidates = cleaned.filter(isValidVideoUrl);
+                                if (candidates.length > 0) {
+                                    const best = pickBestVideoUrl(candidates);
+                                    if (best && isValidVideoUrl(best)) {
+                                        callback(best, null);
+                                        return;
+                                    }
                                 }
                             }
-                        }
-                        if (scriptCandidates.length > 0) {
-                            const best = pickBestVideoUrl(scriptCandidates);
-                            if (best && isValidVideoUrl(best)) {
-                                callback(best, null);
-                                return;
+                            if (!silent) {
+                                alert('Could not find the HD video URL yet.\n\nTip: Make sure the video has started playing, then click the button again.');
                             }
-                        }
-                    }
-
-                    // 3. Fallback to background script webRequest
-                    const mediaType = isVideo ? 'video' : 'img';
-                    safeSendMessage({ action: 'getMediaUrls', mediaType: mediaType }, (response) => {
-                        if (response && response.urls && response.urls.length > 0) {
-                            const cleaned = response.urls.map(cleanVideoUrl).filter(Boolean);
-                            const candidates = cleaned.filter(isValidVideoUrl);
-                            if (candidates.length > 0) {
-                                const best = pickBestVideoUrl(candidates);
-                                if (best && isValidVideoUrl(best)) {
-                                    callback(best, null);
-                                    return;
-                                }
-                            }
-                        }
+                        });
+                    } else {
                         if (!silent) {
                             alert('Could not find the HD video URL yet.\n\nTip: Make sure the video has started playing, then click the button again.');
                         }
-                    });
+                    }
                 }
             };
 

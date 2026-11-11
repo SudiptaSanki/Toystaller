@@ -1,21 +1,71 @@
 // core/interceptor_core.js
-// Runs in the MAIN page world. Intercepts fetch/XHR for CDN video URLs
-// and exposes a React Fiber extractor for accurate per-video URL lookup.
-// Platform-specific behavior is delegated to window.ToystallerPlatform (singular).
+// Runs in the MAIN page world.
+// Intercepts fetch/XHR for CDN video URLs with Relay/GraphQL video ID association,
+// tracks SPA URL navigation (Reels scrolling), and traverses React Fiber trees up through parent
+// components to extract master HD video URLs (playable_url_quality_hd, browser_native_hd_url, video_versions).
 
 (function () {
     'use strict';
     if (window.__toystallerInterceptorLoaded) return;
     window.__toystallerInterceptorLoaded = true;
 
-    // The active platform object — set by the platform's interceptor.js before this file loads.
-    // Falls back to a no-op generic if not set.
+    // --- Video Store by Video ID & MRU History ---
+    const videoStoreById = new Map();
+    const recentVideosMRU = []; // Ordered list of videoIds, most recent first (max 50)
+
+    function recordVideoEntry(videoId, hdUrl, sdUrl, extraUrl, audioUrl = null) {
+        if (!videoId && !hdUrl && !sdUrl && !extraUrl) return;
+        const id = videoId ? String(videoId).trim() : null;
+
+        let entry = id ? videoStoreById.get(id) : null;
+        if (!entry) {
+            entry = { id: id, hd: null, sd: null, audioUrl: null, allUrls: new Set(), timestamp: Date.now() };
+            if (id) {
+                videoStoreById.set(id, entry);
+                const idx = recentVideosMRU.indexOf(id);
+                if (idx !== -1) recentVideosMRU.splice(idx, 1);
+                recentVideosMRU.unshift(id);
+                if (recentVideosMRU.length > 50) {
+                    const removed = recentVideosMRU.pop();
+                    videoStoreById.delete(removed);
+                }
+            }
+        }
+
+        entry.timestamp = Date.now();
+        if (hdUrl && isValidVideo(hdUrl)) entry.hd = hdUrl;
+        if (sdUrl && isValidVideo(sdUrl)) entry.sd = sdUrl;
+        if (audioUrl) entry.audioUrl = audioUrl;
+        if (extraUrl && isValidVideo(extraUrl)) entry.allUrls.add(extraUrl);
+        if (entry.hd) entry.allUrls.add(entry.hd);
+        if (entry.sd) entry.allUrls.add(entry.sd);
+    }
+
+    // --- Monkey-patch history pushState / replaceState for Instant Reel Navigation Detection ---
+    try {
+        const originalPushState = history.pushState;
+        history.pushState = function (...args) {
+            const res = originalPushState.apply(this, args);
+            window.postMessage({ type: 'toystaller_url_changed', url: window.location.href }, '*');
+            return res;
+        };
+        const originalReplaceState = history.replaceState;
+        history.replaceState = function (...args) {
+            const res = originalReplaceState.apply(this, args);
+            window.postMessage({ type: 'toystaller_url_changed', url: window.location.href }, '*');
+            return res;
+        };
+        window.addEventListener('popstate', () => {
+            window.postMessage({ type: 'toystaller_url_changed', url: window.location.href }, '*');
+        });
+    } catch (e) {}
+
     const getPlatform = () => {
-        return window.ToystallerPlatform || {
+        return window.ToystallerActivePlatform || window.ToystallerPlatform || {
             name: 'generic',
             shouldSkipReactValue() { return false; },
-            looksLikeReactVideo(val) { return val.toLowerCase().includes('.mp4'); },
-            looksLikeReactImage(val, key) { return key.toLowerCase().includes('image') || val.toLowerCase().includes('.jpg'); },
+            looksLikeReactVideo(val) { return val && typeof val === 'string' && val.toLowerCase().includes('.mp4'); },
+            looksLikeReactImage(val, key) { return key && key.toLowerCase().includes('image') || (val && typeof val === 'string' && val.toLowerCase().includes('.jpg')); },
             extractPriorityReactUrl() { return null; },
             extractVideoUrlFromDOM() { return null; },
             isValidVideo() { return true; },
@@ -23,37 +73,23 @@
         };
     };
 
-    // --- Network Interception: Scan JSON responses for video URLs ---
-
-    function findVideoUrls(obj, found = new Set(), depth = 0) {
-        if (depth > 12 || !obj || typeof obj !== 'object') return found;
+    function isValidVideo(url) {
         const platform = getPlatform();
+        return platform.isValidVideo ? platform.isValidVideo(url) : true;
+    }
 
-        for (const key of Object.keys(obj)) {
-            const val = obj[key];
-            if (typeof val === 'string') {
-                const isHttp = val.startsWith('https://') || val.startsWith('http://');
-                if (!isHttp || val.includes('blob:')) continue;
-
-                if (platform.shouldSkipReactValue && platform.shouldSkipReactValue(val, key, true)) {
-                    continue;
-                }
-
-                const looksLikeVideo = platform.looksLikeReactVideo && platform.looksLikeReactVideo(val, key);
-                const looksLikeImage = platform.looksLikeReactImage && platform.looksLikeReactImage(val, key);
-
-                if (looksLikeVideo && !looksLikeImage && !val.toLowerCase().includes('bytestart')) {
-                    found.add(val);
-                }
-            } else if (typeof val === 'object') {
-                const platformFound = platform.extractPriorityReactUrl && platform.extractPriorityReactUrl(val, true);
-                if (platformFound) {
-                    found.add(platformFound);
-                }
-                findVideoUrls(val, found, depth + 1);
-            }
-        }
-        return found;
+    function cleanVideoUrl(url) {
+        if (!url || typeof url !== 'string') return null;
+        let clean = url;
+        clean = clean.replace(/\\\//g, '/');
+        clean = clean.replace(/&amp;/g, '&')
+                     .replace(/\\u0026/g, '&')
+                     .replace(/\u0026/g, '&')
+                     .replace(/\\u002526/g, '&');
+        clean = clean.replace(/([?&])bytestart=\d+&?/g, '$1')
+                     .replace(/([?&])byteend=\d+&?/g, '$1');
+        clean = clean.replace(/[?&]$/, '');
+        return clean.trim().replace(/^["']|["']$/g, '');
     }
 
     function dispatchVideoUrls(urls) {
@@ -64,184 +100,502 @@
         }, '*');
     }
 
-    // Get the list of URL patterns to intercept from the platform
-    const getInterceptPatterns = () => {
-        const platform = getPlatform();
-        return platform.getInterceptUrls ? platform.getInterceptUrls() : [];
-    };
+    // --- Parse JSON / Relay Chunks with Video ID Association ---
+    function extractUrlsFromText(text) {
+        if (!text || typeof text !== 'string') return;
+        const lower = text.toLowerCase();
+        if (!lower.includes('.mp4') && !lower.includes('.m4v') && !lower.includes('playable_url') && !lower.includes('browser_native_hd_url') && !lower.includes('fbcdn.net') && !lower.includes('licdn.com') && !lower.includes('cdninstagram.com')) return;
 
-    const shouldIntercept = (url) => {
-        const patterns = getInterceptPatterns();
-        if (patterns.length === 0) return false;
-        return patterns.some(pattern => url.includes(pattern));
-    };
+        let clean = text;
+        if (clean.startsWith('for (;;);')) {
+            clean = clean.substring(9);
+        }
 
-    // Safe fetch() wrapper:
-    // Always invokes with window context to prevent "Illegal invocation" in strict mode.
-    // Strictly targets JSON API / GraphQL responses and never clones or locks media/binary streams.
+        const foundUrls = new Set();
+
+        // 1. Proximity regex for video ID & HD / SD URLs (Facebook / Relay)
+        const chunkRegex = /"(?:video_id|fbid|id)"\s*:\s*"?(\d{10,25})"?[\s\S]{1,1200}?"(playable_url_quality_hd|browser_native_hd_url|hd_src|playable_url|browser_native_sd_url|sd_src)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
+        let cm;
+        while ((cm = chunkRegex.exec(clean)) !== null) {
+            const vid = cm[1];
+            const key = cm[2];
+            try {
+                const rawUrl = JSON.parse('"' + cm[3] + '"');
+                const u = cleanVideoUrl(rawUrl);
+                if (u && isValidVideo(u)) {
+                    foundUrls.add(u);
+                    if (key.includes('hd')) {
+                        recordVideoEntry(vid, u, null, u);
+                    } else {
+                        recordVideoEntry(vid, null, u, u);
+                    }
+                }
+            } catch (err) {}
+        }
+
+        // 2. Named HD/SD keys
+        const videoRegex = /"(playable_url_quality_hd|browser_native_hd_url|hd_src|playable_url|browser_native_sd_url|sd_src|progressive_download_url)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
+        let m;
+        while ((m = videoRegex.exec(clean)) !== null) {
+            const key = m[1];
+            try {
+                const rawUrl = JSON.parse('"' + m[2] + '"');
+                const u = cleanVideoUrl(rawUrl);
+                if (u && isValidVideo(u)) {
+                    foundUrls.add(u);
+                    if (key.includes('hd')) {
+                        recordVideoEntry(null, u, null, u);
+                    } else {
+                        recordVideoEntry(null, null, u, u);
+                    }
+                }
+            } catch (err) {}
+        }
+
+        // 3. General CDN MP4 / M4V / WebM matching
+        const cdnRegex = /"(https:(?:\\\/\\\/|\/\/)[^"]+?\.(?:mp4|m4v|webm)[^"]*)"/g;
+        let cdnM;
+        while ((cdnM = cdnRegex.exec(clean)) !== null) {
+            try {
+                const url = cleanVideoUrl(JSON.parse('"' + cdnM[1] + '"'));
+                if (url && isValidVideo(url)) {
+                    foundUrls.add(url);
+                    recordVideoEntry(null, null, null, url);
+                }
+            } catch (e) {
+                const unescaped = cleanVideoUrl(cdnM[1]);
+                if (unescaped && isValidVideo(unescaped)) {
+                    foundUrls.add(unescaped);
+                    recordVideoEntry(null, null, null, unescaped);
+                }
+            }
+        }
+
+        if (foundUrls.size > 0) {
+            dispatchVideoUrls(foundUrls);
+        }
+    }
+
+    // --- Network Interception: Fetch ---
     const originalFetch = window.fetch;
-    window.fetch = function (...args) {
-        const promise = originalFetch.apply(window, args);
+    window.fetch = async function (...args) {
+        const response = await originalFetch.apply(window, args);
         try {
             const rawUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
             const lowerUrl = rawUrl.toLowerCase();
-            // Strictly exclude video streams, byte ranges, manifests, and CDNs
+            // Exclude pure binary media streams from parsing
             if (
-                !lowerUrl.includes('.mp4') &&
-                !lowerUrl.includes('.m4v') &&
-                !lowerUrl.includes('.webm') &&
                 !lowerUrl.includes('bytestart') &&
-                !lowerUrl.includes('cdninstagram.com') &&
-                !lowerUrl.includes('fbcdn.net') &&
-                shouldIntercept(lowerUrl)
+                (lowerUrl.includes('facebook.com') ||
+                 lowerUrl.includes('fbcdn.net') ||
+                 lowerUrl.includes('linkedin.com') ||
+                 lowerUrl.includes('instagram.com') ||
+                 lowerUrl.includes('/graphql') ||
+                 lowerUrl.includes('/api/'))
             ) {
-                promise.then(response => {
-                    try {
-                        const contentType = response.headers ? response.headers.get('content-type') : '';
-                        if (contentType && contentType.includes('application/json')) {
-                            response.clone().json().then(data => {
-                                const foundVideos = findVideoUrls(data);
-                                dispatchVideoUrls(foundVideos);
-                            }).catch(() => {});
-                        }
-                    } catch (e) {}
-                }).catch(() => {});
+                const clone = response.clone();
+                clone.text().then(extractUrlsFromText).catch(() => {});
             }
         } catch (e) {}
-        return promise;
+        return response;
     };
 
-    // Safe prototype hooking for XMLHttpRequest:
-    // Retains native window.XMLHttpRequest constructor, preserves XMLHttpRequest.DONE and readyState constants,
-    // and never accesses responseText on arraybuffer/blob media streams (preventing InvalidStateError).
-    const originalXHROpen = XMLHttpRequest.prototype.open;
-    const originalXHRSend = XMLHttpRequest.prototype.send;
-
-    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-        this._toystaller_url = (typeof url === 'string') ? url : '';
-        return originalXHROpen.apply(this, [method, url, ...rest]);
-    };
-
-    XMLHttpRequest.prototype.send = function (...args) {
-        this.addEventListener('load', function () {
+    // --- Network Interception: XMLHttpRequest ---
+    const OriginalXHR = window.XMLHttpRequest;
+    function PatchedXHR() {
+        const xhr = new OriginalXHR();
+        const originalOpen = xhr.open.bind(xhr);
+        let reqUrl = '';
+        xhr.open = function (method, url, ...rest) {
+            reqUrl = (typeof url === 'string') ? url : '';
+            return originalOpen(method, url, ...rest);
+        };
+        xhr.addEventListener('load', function () {
             try {
-                // Strict guard: only inspect if response is text/json.
-                // Modern video loaders use arraybuffer/blob — accessing responseText on those throws InvalidStateError!
-                if (this.responseType !== '' && this.responseType !== 'text') {
-                    return;
-                }
-                const reqUrl = (this._toystaller_url || '').toLowerCase();
-                // Never intercept binary media, dash manifests, or CDN video chunks
-                if (reqUrl.includes('.mp4') || reqUrl.includes('.m4v') || reqUrl.includes('bytestart') || reqUrl.includes('cdninstagram.com')) {
-                    return;
-                }
-                if (shouldIntercept(reqUrl)) {
-                    const text = this.responseText;
-                    if (text && (text.startsWith('{') || text.startsWith('['))) {
-                        const data = JSON.parse(text);
-                        const foundVideos = findVideoUrls(data);
-                        dispatchVideoUrls(foundVideos);
-                    }
+                if (this.responseType === '' || this.responseType === 'text') {
+                    extractUrlsFromText(this.responseText);
                 }
             } catch (e) {}
         });
-        return originalXHRSend.apply(this, args);
-    };
+        return xhr;
+    }
+    PatchedXHR.prototype = OriginalXHR.prototype;
+    window.XMLHttpRequest = PatchedXHR;
 
-    // --- React Fiber Extraction ---
-
-    function searchObjForVideoUrl(obj, seen = new Set(), depth = 0, isVideoContext = true) {
-        if (depth > 12 || !obj || typeof obj !== 'object') return null;
-        if (seen.has(obj)) return null;
-        seen.add(obj);
-
-        const platform = getPlatform();
-
-        if (Array.isArray(obj)) {
-            for (let item of obj) {
-                const res = searchObjForVideoUrl(item, seen, depth + 1, isVideoContext);
-                if (res) return res;
+    // --- Initial and Dynamic Script Scanning ---
+    function scanAllScripts() {
+        const scripts = document.querySelectorAll('script[type="application/json"], script:not([src])');
+        for (const s of scripts) {
+            const content = s.textContent;
+            if (content && (content.includes('.mp4') || content.includes('playable_url') || content.includes('browser_native_hd_url'))) {
+                extractUrlsFromText(content);
             }
-        } else {
-            for (let key of Object.keys(obj)) {
-                if (key === 'return' || key === 'sibling' || key === '_owner' || key === 'parent') continue;
+        }
+    }
 
-                const val = obj[key];
-                if (typeof val === 'string') {
-                    const isHttp = val.startsWith('https://') || val.startsWith('http://');
-                    if (isHttp && !val.includes('blob:')) {
-                        if (platform.shouldSkipReactValue && platform.shouldSkipReactValue(val, key, isVideoContext)) {
-                            continue;
-                        }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', scanAllScripts);
+    } else {
+        scanAllScripts();
+    }
 
-                        const looksLikeImage = !isVideoContext && platform.looksLikeReactImage && platform.looksLikeReactImage(val, key);
-                        const looksLikeVideo = isVideoContext && platform.looksLikeReactVideo && platform.looksLikeReactVideo(val, key);
-
-                        if (looksLikeImage || looksLikeVideo) {
-                            return val;
-                        }
+    try {
+        const scriptObserver = new MutationObserver((mutations) => {
+            for (const m of mutations) {
+                for (const node of m.addedNodes) {
+                    if (node.tagName === 'SCRIPT' && node.textContent) {
+                        extractUrlsFromText(node.textContent);
                     }
-                } else if (typeof val === 'object') {
-                    const platformFound = platform.extractPriorityReactUrl && platform.extractPriorityReactUrl(val, isVideoContext);
-                    if (platformFound) {
-                        return platformFound;
-                    }
-                    const nested = searchObjForVideoUrl(val, seen, depth + 1, isVideoContext);
-                    if (nested) return nested;
+                }
+            }
+        });
+        if (document.documentElement) {
+            scriptObserver.observe(document.documentElement, { childList: true, subtree: true });
+        }
+    } catch(e) {}
+
+    // Find currently active viewport video
+    function findActiveViewportVideo() {
+        const videos = Array.from(document.querySelectorAll('video'));
+        if (videos.length === 0) return null;
+        const playing = videos.filter(v => {
+            if (v.paused || v.ended) return false;
+            const r = v.getBoundingClientRect();
+            return r.width > 120 && r.height > 120 &&
+                   r.top < window.innerHeight && r.bottom > 0 &&
+                   r.left < window.innerWidth && r.right > 0;
+        });
+        if (playing.length > 0) return playing[0];
+
+        let best = null;
+        let maxArea = 0;
+        for (const v of videos) {
+            const r = v.getBoundingClientRect();
+            const w = Math.min(r.right, window.innerWidth) - Math.max(r.left, 0);
+            const h = Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0);
+            if (w > 0 && h > 0) {
+                const area = w * h;
+                if (area > maxArea) {
+                    maxArea = area;
+                    best = v;
                 }
             }
         }
+        return best;
+    }
+
+    // --- Deep React Fiber Traversal with Parent (return) Walk ---
+    function inspectFiberProps(obj, seen = new Set(), depth = 0) {
+        if (!obj || typeof obj !== 'object' || depth > 8) return { hd: null, sd: null, id: null, audioUrl: null };
+        if (seen.has(obj)) return { hd: null, sd: null, id: null, audioUrl: null };
+        seen.add(obj);
+
+        const platform = getPlatform();
+        let res = { hd: null, sd: null, id: null, audioUrl: null };
+
+        // 1. Check for Video ID
+        if (obj.id && typeof obj.id === 'string' && /^\d{10,25}$/.test(obj.id)) {
+            res.id = obj.id;
+        } else if (obj.video_id && typeof obj.video_id === 'string' && /^\d{10,25}$/.test(obj.video_id)) {
+            res.id = obj.video_id;
+        } else if (obj.videoId && typeof obj.videoId === 'string' && /^\d{10,25}$/.test(obj.videoId)) {
+            res.id = obj.videoId;
+        }
+
+        // 2. Check platform custom priority extractor
+        if (platform.extractPriorityReactUrl) {
+            const platformFound = platform.extractPriorityReactUrl(obj, true);
+            if (platformFound) {
+                if (typeof platformFound === 'object' && platformFound.url) {
+                    res.hd = cleanVideoUrl(platformFound.url);
+                    res.audioUrl = platformFound.audioUrl ? cleanVideoUrl(platformFound.audioUrl) : null;
+                    return res;
+                } else if (typeof platformFound === 'string') {
+                    res.hd = cleanVideoUrl(platformFound);
+                    return res;
+                }
+            }
+        }
+
+        // 3. Priority HD properties
+        const hdCandidates = [
+            obj.playable_url_quality_hd,
+            obj.browser_native_hd_url,
+            obj.hd_src,
+            obj.hd_src_no_ratelimit,
+            obj.progressive_download_url
+        ];
+        for (const c of hdCandidates) {
+            if (typeof c === 'string') {
+                const clean = cleanVideoUrl(c);
+                if (clean && isValidVideo(clean)) {
+                    res.hd = clean;
+                    return res;
+                }
+            }
+        }
+
+        // 4. Multi-version video array (video_versions)
+        if (Array.isArray(obj.video_versions) && obj.video_versions.length > 0) {
+            const sorted = [...obj.video_versions].sort((a, b) => {
+                const resA = (a.width || 0) * (a.height || 0);
+                const resB = (b.width || 0) * (b.height || 0);
+                return resB - resA;
+            });
+            for (const v of sorted) {
+                if (v && typeof v.url === 'string') {
+                    const clean = cleanVideoUrl(v.url);
+                    if (clean && isValidVideo(clean)) {
+                        res.hd = clean;
+                        return res;
+                    }
+                }
+            }
+        }
+
+        // 5. DASH representations (video + audio sync)
+        if (Array.isArray(obj.representations) && obj.representations.length > 0) {
+            let bestVideoRep = null;
+            let bestAudioRep = null;
+            let maxRes = 0;
+
+            for (const rep of obj.representations) {
+                if (!rep) continue;
+                const repUrl = rep.base_url || rep.url;
+                if (!repUrl || typeof repUrl !== 'string') continue;
+                const mime = (rep.mime_type || '').toLowerCase();
+                const codecs = (rep.codecs || '').toLowerCase();
+
+                if (mime.includes('audio') || codecs.includes('mp4a')) {
+                    if (!bestAudioRep) bestAudioRep = cleanVideoUrl(repUrl);
+                } else {
+                    const w = rep.width || 0;
+                    const h = rep.height || 0;
+                    const area = w * h;
+                    if (area >= maxRes) {
+                        maxRes = area;
+                        bestVideoRep = cleanVideoUrl(repUrl);
+                    }
+                }
+            }
+            if (bestVideoRep && isValidVideo(bestVideoRep)) {
+                res.hd = bestVideoRep;
+                res.audioUrl = bestAudioRep;
+                return res;
+            }
+        }
+
+        // 6. SD properties
+        const sdCandidates = [
+            obj.playable_url,
+            obj.browser_native_sd_url,
+            obj.sd_src,
+            obj.sd_src_no_ratelimit,
+            obj.playback_url,
+            obj.progressiveUrl,
+            obj.streamingUrl,
+            obj.video_url,
+            obj.videoUrl
+        ];
+        for (const c of sdCandidates) {
+            if (typeof c === 'string') {
+                const clean = cleanVideoUrl(c);
+                if (clean && isValidVideo(clean)) {
+                    res.sd = clean;
+                }
+            }
+        }
+
+        // 7. Recurse into nested objects
+        const priorityKeys = ['video', 'media', 'creation_story', 'playbackData', 'videoData', 'feedUnit', 'attachment', 'reel', 'mediaMetadata'];
+        for (const k of priorityKeys) {
+            if (obj[k] && typeof obj[k] === 'object') {
+                const child = inspectFiberProps(obj[k], seen, depth + 1);
+                if (child.hd) { res.hd = child.hd; res.audioUrl = child.audioUrl; return res; }
+                if (child.sd && !res.sd) res.sd = child.sd;
+                if (child.id && !res.id) res.id = child.id;
+            }
+        }
+
+        for (const k of Object.keys(obj)) {
+            if (priorityKeys.includes(k) || k === 'return' || k === 'sibling' || k === 'child' || k === '_owner' || k === 'stateNode') continue;
+            if (obj[k] && typeof obj[k] === 'object') {
+                const child = inspectFiberProps(obj[k], seen, depth + 1);
+                if (child.hd) { res.hd = child.hd; res.audioUrl = child.audioUrl; return res; }
+                if (child.sd && !res.sd) res.sd = child.sd;
+                if (child.id && !res.id) res.id = child.id;
+            }
+        }
+
+        return res;
+    }
+
+    // Traverses the React Fiber hierarchy from the given DOM element up to 45 ancestor components.
+    function extractVideoUrlFromFiberTree(el) {
+        if (!el) return null;
+
+        // Locate Fiber key (specifically avoid __reactProps$ which only has DOM attributes)
+        const fiberKey = Object.keys(el).find(k =>
+            k.startsWith('__reactFiber$') ||
+            k.startsWith('__reactInternalInstance$')
+        );
+        let fiber = fiberKey ? el[fiberKey] : null;
+
+        let bestHd = null;
+        let bestSd = null;
+        let bestAudioUrl = null;
+        let detectedId = null;
+
+        let depth = 0;
+        while (fiber && depth < 45) {
+            if (fiber.memoizedProps) {
+                const p = inspectFiberProps(fiber.memoizedProps);
+                if (p.hd) { bestHd = p.hd; bestAudioUrl = p.audioUrl; break; }
+                if (p.sd && !bestSd) bestSd = p.sd;
+                if (p.id && !detectedId) detectedId = p.id;
+            }
+            if (fiber.memoizedState) {
+                const s = inspectFiberProps(fiber.memoizedState);
+                if (s.hd) { bestHd = s.hd; bestAudioUrl = s.audioUrl; break; }
+                if (s.sd && !bestSd) bestSd = s.sd;
+                if (s.id && !detectedId) detectedId = s.id;
+            }
+            if (fiber.pendingProps) {
+                const pp = inspectFiberProps(fiber.pendingProps);
+                if (pp.hd) { bestHd = pp.hd; bestAudioUrl = pp.audioUrl; break; }
+                if (pp.sd && !bestSd) bestSd = pp.sd;
+                if (pp.id && !detectedId) detectedId = pp.id;
+            }
+
+            fiber = fiber.return;
+            depth++;
+        }
+
+        if (bestHd) {
+            if (detectedId) recordVideoEntry(detectedId, bestHd, bestSd, bestHd, bestAudioUrl);
+            return { url: bestHd, audioUrl: bestAudioUrl };
+        }
+
+        if (detectedId && videoStoreById.has(detectedId)) {
+            const entry = videoStoreById.get(detectedId);
+            if (entry.hd) return { url: entry.hd, audioUrl: entry.audioUrl || null };
+        }
+
+        if (bestSd) return { url: bestSd, audioUrl: null };
         return null;
     }
 
-    function extractVideoUrlFromReact(el, isVideoContext = true) {
-        let current = el;
+    // Extract Photo URL from React Fiber
+    function extractImageUrlFromReact(el) {
         const platform = getPlatform();
-
-        if (platform.extractVideoUrlFromDOM) {
-            const domUrl = platform.extractVideoUrlFromDOM(el);
-            if (domUrl) return domUrl;
-        }
-
-        for (let i = 0; i < 12 && current; i++) {
-            const key = Object.keys(current).find(k => k.startsWith('__reactProps$') ||
-                k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+        let current = el;
+        for (let i = 0; i < 10 && current; i++) {
+            const key = Object.keys(current).find(k =>
+                k.startsWith('__reactProps$') ||
+                k.startsWith('__reactFiber$') ||
+                k.startsWith('__reactInternalInstance$')
+            );
             if (key && current[key]) {
-                const found = searchObjForVideoUrl(current[key], new Set(), 0, isVideoContext);
-                if (found) return found;
+                const obj = current[key];
+                if (platform.extractPriorityReactUrl) {
+                    const photoUrl = platform.extractPriorityReactUrl(obj, false);
+                    if (photoUrl) {
+                        const clean = typeof photoUrl === 'object' ? photoUrl.url : photoUrl;
+                        return clean;
+                    }
+                }
             }
             current = current.parentElement;
         }
-
         return null;
     }
 
-    // --- Message handler for content script requests ---
-
+    // --- Content Script Bridge via postMessage ---
     window.addEventListener('message', (e) => {
         if (!e.data || e.data.type !== 'magic_get_react_url' || !e.data.id) return;
-        const id = e.data.id;
+        const reqId = e.data.id;
         const isVideo = e.data.isVideo !== undefined ? e.data.isVideo : true;
-        const el = document.querySelector(`[data-magic-id="${id}"]`);
-
-        let res = null;
-        if (el) {
-            res = extractVideoUrlFromReact(el, isVideo);
-        }
+        const requestedVideoId = e.data.videoId ? String(e.data.videoId).trim() : null;
+        let el = document.querySelector(`[data-magic-id="${reqId}"]`);
 
         let url = null;
         let audioUrl = null;
-        if (res) {
-            if (typeof res === 'object') {
-                url = res.url || null;
-                audioUrl = res.audioUrl || null;
-            } else if (typeof res === 'string') {
-                url = res;
+
+        if (isVideo) {
+            // 1. If videoId was provided, check the video store first
+            if (requestedVideoId && videoStoreById.has(requestedVideoId)) {
+                const entry = videoStoreById.get(requestedVideoId);
+                if (entry.hd) {
+                    url = entry.hd;
+                    audioUrl = entry.audioUrl || null;
+                } else if (entry.sd) {
+                    url = entry.sd;
+                }
+            }
+
+            // 2. Walk the React Fiber component hierarchy of el
+            if (!url && el) {
+                const fiberRes = extractVideoUrlFromFiberTree(el);
+                if (fiberRes) {
+                    url = fiberRes.url;
+                    audioUrl = fiberRes.audioUrl || null;
+                }
+            }
+
+            // 3. Fallback: check active playing video in viewport
+            if (!url) {
+                const activeVid = (el && el.querySelector && el.querySelector('video')) || findActiveViewportVideo();
+                if (activeVid) {
+                    const fiberRes = extractVideoUrlFromFiberTree(activeVid);
+                    if (fiberRes) {
+                        url = fiberRes.url;
+                        audioUrl = fiberRes.audioUrl || null;
+                    }
+                }
+            }
+
+            // 4. Check current Reel ID from URL if on /reel/
+            if (!url && window.location.pathname.includes('/reel/')) {
+                const m = window.location.pathname.match(/\/reel\/(\d+)/);
+                if (m && m[1] && videoStoreById.has(m[1])) {
+                    const entry = videoStoreById.get(m[1]);
+                    if (entry.hd) {
+                        url = entry.hd;
+                        audioUrl = entry.audioUrl || null;
+                    } else if (entry.sd) {
+                        url = entry.sd;
+                    }
+                }
+            }
+
+            // 5. Platform DOM / Script lookup matched to Video ID
+            if (!url && el) {
+                const platform = getPlatform();
+                if (platform.extractVideoUrlFromDOM) {
+                    const domRes = platform.extractVideoUrlFromDOM(el);
+                    if (domRes) {
+                        if (typeof domRes === 'object') {
+                            url = domRes.url;
+                            audioUrl = domRes.audioUrl || null;
+                        } else if (typeof domRes === 'string') {
+                            url = domRes;
+                        }
+                    }
+                }
+            }
+        } else {
+            if (el) {
+                url = extractImageUrlFromReact(el);
             }
         }
 
+        if (isVideo && url && !isValidVideo(url)) {
+            url = null;
+            audioUrl = null;
+        }
+
         window.postMessage({
-            type: 'magic_response_react_url_' + id,
+            type: 'magic_response_react_url_' + reqId,
             url: url,
             audioUrl: audioUrl
         }, '*');

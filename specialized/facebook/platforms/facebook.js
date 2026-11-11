@@ -773,6 +773,52 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             return ['facebook.com', 'fbcdn.net', 'graph.', '/api/graphql', '/ajax/', 'graphql'];
         },
 
+        // --- Video ID Extractor ---
+        extractVideoId(el) {
+            if (!el) return null;
+
+            // 1. Direct dataset check on element
+            if (el.dataset && (el.dataset.videoId || el.dataset.video_id)) {
+                return el.dataset.videoId || el.dataset.video_id;
+            }
+
+            // 2. Nearest ancestor container checks
+            const reelLink = el.closest ? el.closest('a[href*="/reel/"], a[href*="/reels/"]') : null;
+            if (reelLink && reelLink.href) {
+                const m = reelLink.href.match(/\/reel(?:s)?\/(\d+)/);
+                if (m) return m[1];
+            }
+
+            const videoLink = el.closest ? el.closest('a[href*="/videos/"], a[href*="/watch/"]') : null;
+            if (videoLink && videoLink.href) {
+                const m = videoLink.href.match(/(?:videos\/|watch\/?\?v=)(\d+)/);
+                if (m) return m[1];
+            }
+
+            const cardWithId = el.closest ? el.closest('[data-video-id], div[data-pagelet*="Reel"], div[data-pagelet*="FeedUnit"], div[role="article"]') : null;
+            if (cardWithId) {
+                if (cardWithId.dataset && cardWithId.dataset.videoId) return cardWithId.dataset.videoId;
+                const link = cardWithId.querySelector ? cardWithId.querySelector('a[href*="/reel/"], a[href*="/videos/"], a[href*="/watch/"]') : null;
+                if (link && link.href) {
+                    const m = link.href.match(/(?:reel\/|videos\/|watch\/?\?v=)(\d+)/);
+                    if (m) return m[1];
+                }
+            }
+
+            // 3. Check page URL if on dedicated video route
+            const loc = window.location.pathname;
+            if (loc.includes('/reel/')) {
+                const m = loc.match(/\/reel\/(\d+)/);
+                if (m) return m[1];
+            }
+            if (loc.includes('/videos/') || window.location.search.includes('v=')) {
+                const m = (loc + window.location.search).match(/(?:videos\/|v=)(\d+)/);
+                if (m) return m[1];
+            }
+
+            return null;
+        },
+
         // --- DOM / Script Tag Video Extractor for Facebook ---
         extractVideoUrlFromDOM(el) {
             if (!el) return null;
@@ -862,30 +908,10 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 return null;
             };
 
-            // 1. Identify Video ID if available
-            let videoId = null;
-            let current = el;
-            for (let i = 0; i < 10 && current; i++) {
-                if (current.dataset && (current.dataset.videoId || current.dataset.video_id)) {
-                    videoId = current.dataset.videoId || current.dataset.video_id;
-                    break;
-                }
-                const link = current.querySelector ? current.querySelector('a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"]') : null;
-                if (link && link.href) {
-                    const m = link.href.match(/(?:videos|watch\/?\?v=|reel\/)(\d+)/);
-                    if (m) { videoId = m[1]; break; }
-                }
-                current = current.parentElement;
-            }
-
-            if (!videoId) {
-                const urlMatch = window.location.href.match(/(?:videos|watch\/?\?v=|reel\/)(\d+)/);
-                if (urlMatch) videoId = urlMatch[1];
-            }
-
+            const videoId = this.extractVideoId(el);
             const scripts = document.querySelectorAll('script[type="application/json"], script:not([src])');
 
-            // Pass 1: Scan scripts containing the videoId
+            // Pass 1: Scan scripts strictly containing this videoId
             if (videoId) {
                 for (const s of scripts) {
                     const text = s.textContent;
@@ -896,12 +922,15 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 }
             }
 
-            // Pass 2: Scan scripts with high-confidence playable keys
-            for (const s of scripts) {
-                const text = s.textContent;
-                if (text && (text.includes('playable_url_quality_hd') || text.includes('browser_native_hd_url') || text.includes('progressive_download_url') || text.includes('playable_url'))) {
-                    const found = parseScriptText(text);
-                    if (found) return found;
+            // Pass 2: Only fallback to generic scan if there is ONLY 1 video element on the entire page
+            const totalVideos = document.querySelectorAll('video').length;
+            if (totalVideos <= 1) {
+                for (const s of scripts) {
+                    const text = s.textContent;
+                    if (text && (text.includes('playable_url_quality_hd') || text.includes('browser_native_hd_url') || text.includes('progressive_download_url'))) {
+                        const found = parseScriptText(text);
+                        if (found) return found;
+                    }
                 }
             }
 
