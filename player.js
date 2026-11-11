@@ -394,7 +394,13 @@
             `;
 
             const cleanUrl = sourceUrl.split('#')[0];
-            isHls = cleanUrl.includes('/pl/') || cleanUrl.includes('.m3u8') || cleanUrl.includes('format=m3u8');
+            const lowerClean = cleanUrl.toLowerCase();
+            isHls = lowerClean.includes('/pl/') || 
+                    lowerClean.includes('.m3u8') || 
+                    lowerClean.includes('format=m3u8') || 
+                    lowerClean.includes('/playlist/') || 
+                    lowerClean.includes('/manifest/') || 
+                    lowerClean.includes('application/x-mpegurl');
 
             if (isHls && window.Hls && Hls.isSupported()) {
                 hlsInstance = new Hls({
@@ -468,12 +474,8 @@
                         hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => videoPlayer.play().catch(() => {}));
                     } else {
                         console.warn("Toystaller Player: Direct preview blocked or pending:", cleanUrl);
-                        if (cleanUrl && !cleanUrl.startsWith('blob:') && !cleanUrl.startsWith('data:')) {
-                            window.location.replace(cleanUrl);
-                        } else {
-                            resText.textContent = 'Preview restricted by host. Click "Download Video" above to save the master MP4 directly.';
-                            resText.style.color = '#ef4444';
-                        }
+                        resText.textContent = 'Preview restricted by host. Click "Download Video" above to save the master MP4 directly.';
+                        resText.style.color = '#ef4444';
                     }
                 });
             }

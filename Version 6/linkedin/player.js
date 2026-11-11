@@ -25,7 +25,13 @@
 
     // Strip any fragment identifier so standard media elements can stream directly
     const videoUrl = rawUrl.split('#')[0];
-    const isHls = videoUrl.includes('/pl/') || videoUrl.includes('.m3u8') || videoUrl.includes('format=m3u8');
+    const lowerVideoUrl = videoUrl.toLowerCase();
+    const isHls = lowerVideoUrl.includes('/pl/') || 
+                  lowerVideoUrl.includes('.m3u8') || 
+                  lowerVideoUrl.includes('format=m3u8') || 
+                  lowerVideoUrl.includes('/playlist/') || 
+                  lowerVideoUrl.includes('/manifest/') || 
+                  lowerVideoUrl.includes('application/x-mpegurl');
 
     let hlsInstance = null;
 
@@ -98,12 +104,8 @@
                         }
                     });
                 } else {
-                    if (videoUrl && !videoUrl.startsWith('blob:') && !videoUrl.startsWith('data:')) {
-                        window.location.replace(videoUrl);
-                    } else {
-                        resText.textContent = 'Unable to stream directly. Please click "Download Video" above to save the file.';
-                        resText.style.color = '#e74c3c';
-                    }
+                    resText.textContent = 'Preview restricted by host. Click "Download Video" above to save directly.';
+                    resText.style.color = '#e74c3c';
                 }
             });
         }

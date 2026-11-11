@@ -114,6 +114,8 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "specialized/instagram/player.html",
+        "specialized/instagram/player.js",
         "specialized/facebook/player.html",
         "specialized/facebook/player.js",
         "specialized/linkedin/player.html",

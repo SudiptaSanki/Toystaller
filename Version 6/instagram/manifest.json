@@ -11,6 +11,7 @@
   },
   "permissions": [
     "webRequest",
+    "declarativeNetRequest",
     "activeTab",
     "scripting",
     "downloads",
@@ -35,11 +36,23 @@
       "run_at": "document_start"
     }
   ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ruleset_1",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
   "web_accessible_resources": [
     {
       "resources": [
         "platform.js",
-        "core/interceptor_core.js"
+        "core/interceptor_core.js",
+        "player.html",
+        "player.js",
+        "icon.png"
       ],
       "matches": ["*://*.instagram.com/*"]
     }

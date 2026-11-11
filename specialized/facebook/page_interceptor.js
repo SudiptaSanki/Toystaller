@@ -88,8 +88,11 @@
                 }
             } else if (typeof val === 'object') {
                 const platformFound = platform.extractPriorityReactUrl && platform.extractPriorityReactUrl(val, true);
-                if (platformFound && isValidVideo(platformFound)) {
-                    found.add(platformFound);
+                if (platformFound) {
+                    const foundUrl = typeof platformFound === 'object' ? platformFound.url : platformFound;
+                    if (foundUrl && isValidVideo(foundUrl)) {
+                        found.add(foundUrl);
+                    }
                 }
                 findVideoUrls(val, found, depth + 1);
             }
@@ -259,8 +262,14 @@
             // Check priority object extractor first
             const platformFound = platform.extractPriorityReactUrl && platform.extractPriorityReactUrl(obj, isVideoContext);
             if (platformFound) {
-                if (!isVideoContext || isValidVideo(platformFound)) {
-                    return platformFound;
+                if (typeof platformFound === 'object' && platformFound.url) {
+                    if (!isVideoContext || isValidVideo(platformFound.url)) {
+                        return platformFound;
+                    }
+                } else if (typeof platformFound === 'string') {
+                    if (!isVideoContext || isValidVideo(platformFound)) {
+                        return platformFound;
+                    }
                 }
             }
 
@@ -306,9 +315,19 @@
             if (key && current[key]) {
                 const found = searchObjForVideoUrl(current[key], new Set(), 0, isVideoContext);
                 if (found) {
-                    const clean = cleanVideoUrl(found);
-                    if (!isVideoContext || isValidVideo(clean)) {
-                        return clean;
+                    if (typeof found === 'object' && found.url) {
+                        const clean = cleanVideoUrl(found.url);
+                        if (!isVideoContext || isValidVideo(clean)) {
+                            return {
+                                url: clean,
+                                audioUrl: found.audioUrl ? cleanVideoUrl(found.audioUrl) : null
+                            };
+                        }
+                    } else if (typeof found === 'string') {
+                        const clean = cleanVideoUrl(found);
+                        if (!isVideoContext || isValidVideo(clean)) {
+                            return { url: clean, audioUrl: null };
+                        }
                     }
                 }
             }
@@ -320,7 +339,7 @@
             const domUrl = platform.extractVideoUrlFromDOM(el);
             if (domUrl) {
                 const clean = cleanVideoUrl(domUrl);
-                if (isValidVideo(clean)) return clean;
+                if (isValidVideo(clean)) return { url: clean, audioUrl: null };
             }
         }
 
@@ -334,19 +353,32 @@
         const isVideo = e.data.isVideo !== undefined ? e.data.isVideo : true;
         const el = document.querySelector(`[data-magic-id="${id}"]`);
 
-        let url = null;
+        let res = null;
         if (el) {
-            url = extractVideoUrlFromReact(el, isVideo);
+            res = extractVideoUrlFromReact(el, isVideo);
+        }
+
+        let url = null;
+        let audioUrl = null;
+        if (res) {
+            if (typeof res === 'object') {
+                url = res.url || null;
+                audioUrl = res.audioUrl || null;
+            } else if (typeof res === 'string') {
+                url = res;
+            }
         }
 
         // Guarantee that non-video internal URLs are never sent back for video requests
         if (isVideo && url && !isValidVideo(url)) {
             url = null;
+            audioUrl = null;
         }
 
         window.postMessage({
             type: 'magic_response_react_url_' + id,
-            url: url
+            url: url,
+            audioUrl: audioUrl
         }, '*');
     });
 

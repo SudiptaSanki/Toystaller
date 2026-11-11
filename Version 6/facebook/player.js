@@ -1,16 +1,20 @@
 // player.js
-// Handles video playback and direct download inside the Toystaller Player tab.
+// Handles video playback and direct download inside the Toystaller Facebook Player tab.
 
 (function() {
     'use strict';
 
     const params = new URLSearchParams(window.location.search);
     const videoUrl = params.get('url');
+    const audioUrl = params.get('audioUrl');
 
     const player = document.getElementById('videoPlayer');
+    const audioPlayer = document.getElementById('audioPlayer');
     const dlBtn = document.getElementById('dlBtn');
+    const dlAudioBtn = document.getElementById('dlAudioBtn');
     const copyBtn = document.getElementById('copyBtn');
     const resText = document.getElementById('resolutionText');
+    const formatText = document.getElementById('formatText');
 
     if (!videoUrl) {
         document.body.innerHTML = `
@@ -22,7 +26,47 @@
         return;
     }
 
-    player.src = videoUrl;
+    const cleanVideoUrl = videoUrl.split('#')[0];
+    const cleanAudioUrl = audioUrl ? audioUrl.split('#')[0] : null;
+
+    player.src = cleanVideoUrl;
+
+    if (cleanAudioUrl && audioPlayer) {
+        audioPlayer.src = cleanAudioUrl;
+        if (formatText) formatText.textContent = 'Direct DASH Stream (Synced Audio + Video)';
+        if (dlAudioBtn) dlAudioBtn.style.display = 'inline-flex';
+
+        const syncAudio = () => {
+            audioPlayer.currentTime = player.currentTime;
+            audioPlayer.volume = player.volume;
+            audioPlayer.muted = player.muted;
+            if (!player.paused) {
+                audioPlayer.play().catch(() => {});
+            } else {
+                audioPlayer.pause();
+            }
+        };
+
+        player.addEventListener('play', syncAudio);
+        player.addEventListener('pause', syncAudio);
+        player.addEventListener('seeking', syncAudio);
+        player.addEventListener('seeked', syncAudio);
+        player.addEventListener('volumechange', syncAudio);
+
+        dlAudioBtn.addEventListener('click', () => {
+            const filename = `Facebook_Audio_${Date.now()}.mp3`;
+            chrome.runtime.sendMessage({
+                action: 'downloadMedia',
+                url: cleanAudioUrl,
+                filename: filename
+            }, (response) => {
+                if (response && response.success) {
+                    dlAudioBtn.textContent = 'Audio Downloaded';
+                    setTimeout(() => { dlAudioBtn.textContent = 'Download Audio'; }, 2500);
+                }
+            });
+        });
+    }
 
     player.addEventListener('loadedmetadata', () => {
         if (player.videoWidth && player.videoHeight) {
@@ -31,21 +75,18 @@
     });
 
     player.addEventListener('error', () => {
-        if (videoUrl && !videoUrl.startsWith('blob:') && !videoUrl.startsWith('data:')) {
-            window.location.replace(videoUrl);
-        } else {
-            resText.textContent = 'Unable to stream directly. Please click "Download Video" above to save the file.';
-            resText.style.color = '#e74c3c';
-        }
+        // Keep user inside the player with clear action instead of raw navigation
+        resText.textContent = 'Preview blocked by host headers. Click "Download Video" above to save the master MP4 directly.';
+        resText.style.color = '#e74c3c';
     });
 
     dlBtn.addEventListener('click', () => {
-        const idMatch = videoUrl.match(/\/(\d+_[^/?]+)/);
+        const idMatch = cleanVideoUrl.match(/\/(\d+_[^/?]+)/);
         const filename = idMatch ? `Facebook_${idMatch[1]}.mp4` : `Facebook_Video_${Date.now()}.mp4`;
         
         chrome.runtime.sendMessage({
             action: 'downloadMedia',
-            url: videoUrl,
+            url: cleanVideoUrl,
             filename: filename
         }, (response) => {
             if (response && response.success) {
@@ -70,7 +111,7 @@
     });
 
     copyBtn.addEventListener('click', () => {
-        navigator.clipboard.writeText(videoUrl).then(() => {
+        navigator.clipboard.writeText(cleanVideoUrl).then(() => {
             copyBtn.textContent = 'Copied!';
             setTimeout(() => {
                 copyBtn.innerHTML = `
@@ -84,4 +125,3 @@
         });
     });
 })();
-

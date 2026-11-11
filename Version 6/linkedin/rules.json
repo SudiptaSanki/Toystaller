@@ -9,6 +9,23 @@
           "header": "Referer",
           "operation": "set",
           "value": "https://www.linkedin.com/"
+        },
+        {
+          "header": "Origin",
+          "operation": "set",
+          "value": "https://www.linkedin.com"
+        }
+      ],
+      "responseHeaders": [
+        {
+          "header": "Cross-Origin-Resource-Policy",
+          "operation": "set",
+          "value": "cross-origin"
+        },
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
         }
       ]
     },

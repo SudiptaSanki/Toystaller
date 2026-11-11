@@ -220,12 +220,7 @@ function injectDownloadButtons() {
                             safeSendMessage({ action: 'openInNewTab', url: getHighResImageUrl(), isVideo: false });
                         }, 250);
                     } else {
-                        // Video: resolve best URL and open in new tab (routed to player)
-                        if (openBtn.__resolvedVideoUrl) {
-                            safeSendMessage({ action: 'openInNewTab', url: openBtn.__resolvedVideoUrl, isVideo: true });
-                            return;
-                        }
-
+                        // Video: resolve fresh URL and open in dedicated LinkedIn player tab
                         openBtn.style.opacity = '1';
                         openBtn.style.backgroundColor = 'rgba(10, 102, 194, 0.95)';
 
@@ -234,7 +229,7 @@ function injectDownloadButtons() {
                             openBtn.style.backgroundColor = 'rgba(30,30,30,0.75)';
                             if (url) {
                                 openBtn.__resolvedVideoUrl = url;
-                                safeSendMessage({ action: 'openInNewTab', url: url, isVideo: true });
+                                safeSendMessage({ action: 'openInNewTab', url: url, isVideo: true, platform: 'linkedin' });
                             } else {
                                 alert('Could not resolve video URL. If the video is paused, please click play and try again.');
                             }
@@ -456,6 +451,11 @@ function injectDownloadButtons() {
                     if (openBtn) {
                         preResolveVideoUrl(openBtn);
 
+                        media.addEventListener('loadstart', () => {
+                            delete openBtn.__resolvedVideoUrl;
+                            preResolveVideoUrl(openBtn);
+                        }, { passive: true });
+
                         if (!openBtn.__resolvedVideoUrl) {
                             const onCanPlay = () => {
                                 preResolveVideoUrl(openBtn);
@@ -630,6 +630,6 @@ function toggleDashboardOverlay() {
 
 
 bootToystaller([
-    'platforms/linkedin.js',
-    'page_interceptor.js'
+    'specialized/linkedin/platforms/linkedin.js',
+    'specialized/linkedin/page_interceptor.js'
 ]);

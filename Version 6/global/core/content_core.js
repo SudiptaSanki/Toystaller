@@ -383,11 +383,12 @@ function injectDownloadButtons() {
                             platform: platformName 
                         });
                     } else {
-                        getMediaUrl((url) => {
+                        getMediaUrl((url, audioUrl = null) => {
                             if (!url) return;
                             safeSendMessage({ 
                                 action: 'openInNewTab', 
                                 url: url, 
+                                audioUrl: audioUrl,
                                 isVideo: true, 
                                 platform: platformName 
                             });
@@ -494,8 +495,21 @@ function injectDownloadButtons() {
             };
 
             const getMediaUrl = (callback, silent = false) => {
-                // Step 1: Try React Fiber extraction
                 if (isVideo) {
+                    // Step 0: Try DOM extraction (critical for LinkedIn data-sources & Facebook video links)
+                    if (platform.extractVideoUrlFromDOM) {
+                        const domUrl = platform.extractVideoUrlFromDOM(media);
+                        if (domUrl) {
+                            if (typeof domUrl === 'object' && domUrl.url) {
+                                callback(domUrl.url, domUrl.audioUrl || null);
+                            } else if (typeof domUrl === 'string') {
+                                callback(domUrl, null);
+                            }
+                            return;
+                        }
+                    }
+
+                    // Step 1: Try React Fiber extraction
                     let resolved = false;
                     const handler = (e) => {
                         if (!e.data || e.data.type !== 'magic_response_react_url_' + magicId) return;
@@ -503,13 +517,13 @@ function injectDownloadButtons() {
                         resolved = true;
                         window.removeEventListener('message', handler);
                         if (e.data.url) {
-                            callback(e.data.url);
+                            callback(e.data.url, e.data.audioUrl || null);
                         } else {
                             // Platform-specific fallback before generic fallback
                             if (platform.fetchVideoFallback) {
-                                platform.fetchVideoFallback(window.location.href, safeSendMessage, (url) => {
+                                platform.fetchVideoFallback(window.location.href, safeSendMessage, (url, audioUrl = null) => {
                                     if (url) {
-                                        callback(url);
+                                        callback(url, audioUrl);
                                     } else {
                                         getMediaUrlFallback(callback, silent);
                                     }
@@ -527,7 +541,7 @@ function injectDownloadButtons() {
                         resolved = true;
                         window.removeEventListener('message', handler);
                         getMediaUrlFallback(callback, silent);
-                    }, 300);
+                    }, 350);
                     return;
                 }
 
@@ -535,6 +549,18 @@ function injectDownloadButtons() {
             };
 
             const getMediaUrlFallback = (callback, silent = false) => {
+                // Priority check: DOM sources attribute on/around media
+                if (isVideo && platform.extractVideoUrlFromDOM) {
+                    const domUrl = platform.extractVideoUrlFromDOM(media);
+                    if (domUrl) {
+                        if (typeof domUrl === 'object' && domUrl.url) {
+                            callback(domUrl.url, domUrl.audioUrl || null);
+                        } else if (typeof domUrl === 'string') {
+                            callback(domUrl, null);
+                        }
+                        return;
+                    }
+                }
                 const currentSrc = media.currentSrc || media.src || '';
                 const isBlobSource = currentSrc.startsWith('blob:') || currentSrc.startsWith('data:');
 
@@ -624,7 +650,7 @@ function injectDownloadButtons() {
             if (window.magicOverlayManager) {
                 window.magicOverlayManager.addOverlay(media, createButtonsFn);
                 if (isVideo) {
-                    setTimeout(() => {
+                    const doPreResolve = () => {
                         const overlay = window.magicOverlayManager.overlays.get(media);
                         if (overlay && overlay.container) {
                             const openBtn = overlay.container.querySelector('.magic-open-btn');
@@ -632,7 +658,18 @@ function injectDownloadButtons() {
                                 preResolveVideoUrl(openBtn);
                             }
                         }
-                    }, 100);
+                    };
+                    setTimeout(doPreResolve, 150);
+                    media.addEventListener('loadstart', () => {
+                        const overlay = window.magicOverlayManager.overlays.get(media);
+                        if (overlay && overlay.container) {
+                            const openBtn = overlay.container.querySelector('.magic-open-btn');
+                            if (openBtn) {
+                                delete openBtn.__resolvedVideoUrl;
+                                preResolveVideoUrl(openBtn);
+                            }
+                        }
+                    }, { passive: true });
                 }
             }
         }

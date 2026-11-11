@@ -54,8 +54,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         return true;
     } else if (request.action === 'openInNewTab') {
-        chrome.tabs.create({ url: request.url });
+        const url = request.url || '';
+        const isVideo = request.isVideo !== false && (url.includes('.mp4') || url.includes('.m4v') || url.includes('video') || url.includes('mime=video'));
+        const targetUrl = isVideo ? (chrome.runtime.getURL('player.html') + '?url=' + encodeURIComponent(url)) : url;
+        chrome.tabs.create({ url: targetUrl });
         sendResponse({ success: true });
+        return true;
     }
     // Platform-specific handlers are added by each extension's background.js
 });

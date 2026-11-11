@@ -7,6 +7,16 @@ const viewerMediaCache = new Map();
 const mediaExtensions = ['.mp4', '.m3u8', '.webm', '.ogg', '.mov', '.avi', '.mkv', '.flv', '.wmv', '.m4v', '.m4a'];
 const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
 
+function addToBoundedSet(set, item, max = 25) {
+    if (!set || !item) return;
+    if (set.has(item)) return;
+    if (set.size >= max) {
+        const oldest = set.values().next().value;
+        set.delete(oldest);
+    }
+    set.add(item);
+}
+
 // Listen for network media requests across all platforms
 chrome.webRequest.onResponseStarted.addListener(
     (details) => {
@@ -42,6 +52,7 @@ chrome.webRequest.onResponseStarted.addListener(
                         lowerUrl.includes('/v/t64.') ||
                         lowerUrl.includes('/v/t66.') ||
                         lowerUrl.includes('/o1/v/') ||
+                        (lowerUrl.includes('licdn.com') && (lowerUrl.includes('/playlist/') || lowerUrl.includes('.m3u8'))) ||
                         (lowerUrl.includes('fbcdn.net') && (lowerUrl.includes('/v/') || lowerUrl.includes('video.'))));
 
         const isImage = (type === 'image') ||
@@ -63,8 +74,8 @@ chrome.webRequest.onResponseStarted.addListener(
                                .replace(/([?&])byteend=\d+&?/g, '$1')
                                .replace(/[?&]$/, '')
                                .trim();
-                interceptedMedia[tabId].audio.add(clean);
-            } else if (isVideo && !lowerUrl.includes('/audio') && !lowerUrl.includes('.mpd') && !lowerUrl.includes('manifest')) {
+                addToBoundedSet(interceptedMedia[tabId].audio, clean, 25);
+            } else if (isVideo && !lowerUrl.includes('/audio') && !lowerUrl.includes('.mpd')) {
                 let clean = url.replace(/\\\//g, '/')
                                .replace(/&amp;/g, '&')
                                .replace(/\\u0026/g, '&')
@@ -72,9 +83,9 @@ chrome.webRequest.onResponseStarted.addListener(
                                .replace(/([?&])byteend=\d+&?/g, '$1')
                                .replace(/[?&]$/, '')
                                .trim();
-                interceptedMedia[tabId].video.add(clean);
+                addToBoundedSet(interceptedMedia[tabId].video, clean, 25);
             } else if (isImage) {
-                interceptedMedia[tabId].img.add(url);
+                addToBoundedSet(interceptedMedia[tabId].img, url, 25);
             }
         }
     },
@@ -186,11 +197,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         if (isVideo) {
             if (platformLower === 'instagram' || lowerUrl.includes('cdninstagram.com')) {
-                // Instagram Edition: direct master video URL in new tab (native browser player with spoofed Referer)
-                targetUrl = url;
+                // Instagram Edition: dedicated player tab with Instagram Edition badge and direct downloader
+                targetUrl = chrome.runtime.getURL('specialized/instagram/player.html') + '?url=' + encodeURIComponent(url);
             } else if (platformLower === 'facebook' || lowerUrl.includes('fbcdn.net') || lowerUrl.includes('fbsbx.com')) {
-                // Facebook Edition: dedicated player tab with Facebook Edition badge and HD progressive master MP4
-                targetUrl = chrome.runtime.getURL('specialized/facebook/player.html') + '?url=' + encodeURIComponent(url);
+                // Facebook Edition: dedicated player tab with Facebook Edition badge, progressive master MP4 & DASH audio sync
+                let fbPlayerUrl = chrome.runtime.getURL('specialized/facebook/player.html') + '?url=' + encodeURIComponent(url);
+                if (request.audioUrl) {
+                    fbPlayerUrl += '&audioUrl=' + encodeURIComponent(request.audioUrl);
+                }
+                targetUrl = fbPlayerUrl;
             } else if (platformLower === 'linkedin' || lowerUrl.includes('licdn.com') || isHlsStream) {
                 // LinkedIn Edition: dedicated player tab with LinkedIn Edition badge, Hls.js, and master MP4 support
                 targetUrl = chrome.runtime.getURL('specialized/linkedin/player.html') + '?url=' + encodeURIComponent(url);
@@ -352,6 +367,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     delete interceptedMedia[tabId];
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    // Clear accumulated media buffer on fresh navigation to prevent old media leaking
+    if (changeInfo.status === 'loading' && changeInfo.url) {
+        delete interceptedMedia[tabId];
+    }
 });
 
 chrome.action.onClicked.addListener((tab) => {

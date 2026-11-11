@@ -224,14 +224,26 @@
         const isVideo = e.data.isVideo !== undefined ? e.data.isVideo : true;
         const el = document.querySelector(`[data-magic-id="${id}"]`);
 
-        let url = null;
+        let res = null;
         if (el) {
-            url = extractVideoUrlFromReact(el, isVideo);
+            res = extractVideoUrlFromReact(el, isVideo);
+        }
+
+        let url = null;
+        let audioUrl = null;
+        if (res) {
+            if (typeof res === 'object') {
+                url = res.url || null;
+                audioUrl = res.audioUrl || null;
+            } else if (typeof res === 'string') {
+                url = res;
+            }
         }
 
         window.postMessage({
             type: 'magic_response_react_url_' + id,
-            url: url
+            url: url,
+            audioUrl: audioUrl
         }, '*');
     });
 

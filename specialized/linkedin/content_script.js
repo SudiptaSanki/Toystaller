@@ -220,12 +220,7 @@ function injectDownloadButtons() {
                             safeSendMessage({ action: 'openInNewTab', url: getHighResImageUrl(), isVideo: false });
                         }, 250);
                     } else {
-                        // Video: resolve best URL and open in new tab (routed to player)
-                        if (openBtn.__resolvedVideoUrl) {
-                            safeSendMessage({ action: 'openInNewTab', url: openBtn.__resolvedVideoUrl, isVideo: true });
-                            return;
-                        }
-
+                        // Video: resolve fresh URL and open in dedicated LinkedIn player tab
                         openBtn.style.opacity = '1';
                         openBtn.style.backgroundColor = 'rgba(10, 102, 194, 0.95)';
 
@@ -455,6 +450,11 @@ function injectDownloadButtons() {
                     const openBtn = entry.container.querySelector('.magic-open-btn');
                     if (openBtn) {
                         preResolveVideoUrl(openBtn);
+
+                        media.addEventListener('loadstart', () => {
+                            delete openBtn.__resolvedVideoUrl;
+                            preResolveVideoUrl(openBtn);
+                        }, { passive: true });
 
                         if (!openBtn.__resolvedVideoUrl) {
                             const onCanPlay = () => {

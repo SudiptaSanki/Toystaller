@@ -311,7 +311,13 @@
             `;
 
             const cleanUrl = sourceUrl.split('#')[0];
-            isHls = cleanUrl.includes('/pl/') || cleanUrl.includes('.m3u8') || cleanUrl.includes('format=m3u8');
+            const lowerClean = cleanUrl.toLowerCase();
+            isHls = lowerClean.includes('/pl/') || 
+                    lowerClean.includes('.m3u8') || 
+                    lowerClean.includes('format=m3u8') || 
+                    lowerClean.includes('/playlist/') || 
+                    lowerClean.includes('/manifest/') || 
+                    lowerClean.includes('application/x-mpegurl');
 
             if (isHls && window.Hls && Hls.isSupported()) {
                 hlsInstance = new Hls({

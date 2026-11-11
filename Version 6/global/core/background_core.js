@@ -84,9 +84,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         const shouldUsePlayer = isVideo && (isSpecialVideoPlatform || isHlsStream || request.forcePlayer);
 
-        const playerUrl = chrome.runtime.getURL('player.html') + 
+        let playerUrl = chrome.runtime.getURL('player.html') + 
             '?url=' + encodeURIComponent(url) + 
             (platform ? '&platform=' + encodeURIComponent(platform) : '');
+        if (request.audioUrl) {
+            playerUrl += '&audioUrl=' + encodeURIComponent(request.audioUrl);
+        }
         
         const targetUrl = shouldUsePlayer ? playerUrl : url;
         

@@ -15,6 +15,18 @@
           "operation": "set",
           "value": "https://web.whatsapp.com"
         }
+      ],
+      "responseHeaders": [
+        {
+          "header": "Cross-Origin-Resource-Policy",
+          "operation": "set",
+          "value": "cross-origin"
+        },
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
+        }
       ]
     },
     "condition": {
@@ -38,6 +50,18 @@
           "header": "Origin",
           "operation": "set",
           "value": "https://web.whatsapp.com"
+        }
+      ],
+      "responseHeaders": [
+        {
+          "header": "Cross-Origin-Resource-Policy",
+          "operation": "set",
+          "value": "cross-origin"
+        },
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
         }
       ]
     },

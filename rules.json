@@ -10,10 +10,23 @@
           "operation": "set",
           "value": "https://www.instagram.com/"
         }
+      ],
+      "responseHeaders": [
+        {
+          "header": "Cross-Origin-Resource-Policy",
+          "operation": "set",
+          "value": "cross-origin"
+        },
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
+        }
       ]
     },
     "condition": {
       "urlFilter": "||cdninstagram.com",
+      "excludedInitiatorDomains": ["instagram.com"],
       "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
     }
   },
@@ -33,10 +46,23 @@
           "operation": "set",
           "value": "https://www.facebook.com"
         }
+      ],
+      "responseHeaders": [
+        {
+          "header": "Cross-Origin-Resource-Policy",
+          "operation": "set",
+          "value": "cross-origin"
+        },
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
+        }
       ]
     },
     "condition": {
       "urlFilter": "||fbcdn.net",
+      "excludedInitiatorDomains": ["facebook.com", "messenger.com"],
       "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
     }
   },
@@ -56,10 +82,23 @@
           "operation": "set",
           "value": "https://www.facebook.com"
         }
+      ],
+      "responseHeaders": [
+        {
+          "header": "Cross-Origin-Resource-Policy",
+          "operation": "set",
+          "value": "cross-origin"
+        },
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
+        }
       ]
     },
     "condition": {
       "urlFilter": "||fbsbx.com",
+      "excludedInitiatorDomains": ["facebook.com", "messenger.com"],
       "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest"]
     }
   },
@@ -79,10 +118,23 @@
           "operation": "set",
           "value": "https://www.linkedin.com"
         }
+      ],
+      "responseHeaders": [
+        {
+          "header": "Cross-Origin-Resource-Policy",
+          "operation": "set",
+          "value": "cross-origin"
+        },
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
+        }
       ]
     },
     "condition": {
       "urlFilter": "||licdn.com",
+      "excludedInitiatorDomains": ["linkedin.com"],
       "resourceTypes": [
         "main_frame",
         "sub_frame",
@@ -108,10 +160,23 @@
           "operation": "set",
           "value": "https://web.whatsapp.com"
         }
+      ],
+      "responseHeaders": [
+        {
+          "header": "Cross-Origin-Resource-Policy",
+          "operation": "set",
+          "value": "cross-origin"
+        },
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
+        }
       ]
     },
     "condition": {
       "urlFilter": "||whatsapp.net",
+      "excludedInitiatorDomains": ["whatsapp.com", "web.whatsapp.com"],
       "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest", "other"]
     }
   },
@@ -131,10 +196,23 @@
           "operation": "set",
           "value": "https://web.whatsapp.com"
         }
+      ],
+      "responseHeaders": [
+        {
+          "header": "Cross-Origin-Resource-Policy",
+          "operation": "set",
+          "value": "cross-origin"
+        },
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
+        }
       ]
     },
     "condition": {
       "urlFilter": "||whatsapp.com",
+      "excludedInitiatorDomains": ["whatsapp.com", "web.whatsapp.com"],
       "resourceTypes": ["main_frame", "sub_frame", "media", "xmlhttprequest", "other"]
     }
   }

@@ -4,13 +4,28 @@
 
 let toystallerBooted = false;
 
+function isPlatformDomain(host, base) {
+    return host === base || host.endsWith('.' + base);
+}
+
+function isSpecializedPlatformHost(host) {
+    return isPlatformDomain(host, 'facebook.com') ||
+           isPlatformDomain(host, 'messenger.com') ||
+           isPlatformDomain(host, 'instagram.com') ||
+           isPlatformDomain(host, 'linkedin.com') ||
+           isPlatformDomain(host, 'whatsapp.com');
+}
+
 function bootToystaller() {
     if (toystallerBooted) return;
+    const host = window.location.hostname.toLowerCase();
+    if (isSpecializedPlatformHost(host)) {
+        return;
+    }
     toystallerBooted = true;
 
     // Inject platform script and page_interceptor.js dynamically into the MAIN world
     // to ensure they have access to the same window object and execute in order.
-    const host = window.location.hostname.toLowerCase();
     let platformScript = 'platforms/generic.js';
     if (host.includes('instagram.com')) platformScript = 'platforms/instagram.js';
     else if (host.includes('facebook.com')) platformScript = 'platforms/facebook.js';
@@ -769,15 +784,11 @@ function scheduleInject() {
 
 // Removed direct calls; handled by bootToystaller()
 
-const defaultAllowed = ['instagram.com', 'linkedin.com', 'facebook.com', 'whatsapp.com'];
 const currentHost = window.location.hostname.toLowerCase();
-const isDefault = defaultAllowed.some(s => currentHost.includes(s));
 
-if (isDefault) {
-    bootToystaller();
-} else {
-    chrome.storage.local.get({ globalEnabled: false, allowedSites: defaultAllowed }, (result) => {
-        if (result.globalEnabled || result.allowedSites.some(s => currentHost.includes(s))) {
+if (!isSpecializedPlatformHost(currentHost)) {
+    chrome.storage.local.get({ globalEnabled: true, allowedSites: [] }, (result) => {
+        if (result.globalEnabled || (result.allowedSites && result.allowedSites.some(s => currentHost.includes(s)))) {
             bootToystaller();
         }
     });

@@ -49,16 +49,16 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             return isCdn && (this.isAudio(url) || lower.includes('.mp3') || lower.includes('.m4a') || lower.includes('.aac'));
         },
 
-        // --- Video URL Validator (Strictly Progressive Master Videos with Audio) ---
+        // --- Video URL Validator ---
         isValidVideo(url) {
             if (!url || typeof url !== 'string') return false;
             const lower = url.toLowerCase();
             if (lower.startsWith('blob:') || lower.startsWith('data:')) return false;
             if (lower.includes('facebook.com') || lower.includes('messenger.com') || lower.includes('instagram.com')) return false;
             if (lower.includes('unified_cvc')) return false;
-            if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('stream_type=dash')) return false;
+            if (lower.includes('.mpd')) return false;
             
-            // Strictly reject audio-only tracks (e.g. /v/t42. or mime=audio)
+            // Reject audio-only tracks when validating video
             if (this.isAudio(url)) return false;
 
             // Reject image extensions & covers
@@ -68,23 +68,8 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
 
             const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
             const isVideoExt = lower.includes('.mp4') || lower.includes('.m4v') || lower.includes('.webm');
-            const isVideoPath = lower.includes('/v/') || lower.includes('/o1/v/') || lower.includes('/video/') || lower.includes('mime=video') || lower.includes('video.');
+            const isVideoPath = lower.includes('/v/t64.') || lower.includes('/video/') || lower.includes('mime=video') || lower.includes('stream_type=dash') || lower.includes('/o1/v/');
 
-            return isCdn && (isVideoExt || isVideoPath);
-        },
-
-        // --- DASH Video Validator (Video-only fallback for long videos/live VODs) ---
-        isValidDashVideo(url) {
-            if (!url || typeof url !== 'string') return false;
-            const lower = url.toLowerCase();
-            if (lower.startsWith('blob:') || lower.startsWith('data:')) return false;
-            if (lower.includes('facebook.com') || lower.includes('messenger.com') || lower.includes('instagram.com')) return false;
-            if (this.isAudio(url)) return false;
-            if (lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('videocover') || lower.includes('/t15.')) return false;
-            if (lower.includes('.m3u8') || lower.includes('.mpd')) return false;
-            const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
-            const isVideoExt = lower.includes('.mp4') || lower.includes('.m4v') || lower.includes('.webm');
-            const isVideoPath = lower.includes('/v/') || lower.includes('/o1/v/') || lower.includes('/video/') || lower.includes('mime=video') || lower.includes('video.') || lower.includes('stream_type=dash');
             return isCdn && (isVideoExt || isVideoPath);
         },
 
@@ -587,8 +572,6 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
 
         looksLikeReactVideo(val, key) {
             if (!val || typeof val !== 'string') return false;
-            // Never treat DASH video-only streams as high-priority direct videos (they lack audio)
-            if (val.toLowerCase().includes('stream_type=dash')) return false;
             return this.isValidVideo(val);
         },
 
@@ -596,48 +579,138 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             if (!val || typeof val !== 'object') return null;
 
             if (isVideoContext) {
-                // 1. Facebook HD Progressive URL (highest quality master WITH AUDIO)
+                // 1. Multi-version video candidate array - sorted by resolution (highest quality first)
+                if (Array.isArray(val.video_versions) && val.video_versions.length > 0) {
+                    const validVersions = val.video_versions
+                        .filter(v => v && typeof v.url === 'string')
+                        .map(v => ({
+                            url: this.cleanVideoUrl(v.url),
+                            width: v.width || 0,
+                            height: v.height || 0,
+                            bitrate: v.bitrate || 0
+                        }))
+                        .filter(v => v.url && this.isValidVideo(v.url))
+                        .sort((a, b) => {
+                            const resA = a.width * a.height;
+                            const resB = b.width * b.height;
+                            if (resB !== resA) return resB - resA;
+                            return b.bitrate - a.bitrate;
+                        });
+
+                    if (validVersions.length > 0) {
+                        const top = validVersions[0];
+                        let pairedAudio = null;
+                        const lowerTop = top.url.toLowerCase();
+                        if (lowerTop.includes('stream_type=dash') || lowerTop.includes('/o1/v/') || lowerTop.includes('mime=video')) {
+                            const audioReps = val.audio_representations || val.audioRepresentations || (val.audio && val.audio.representations);
+                            if (Array.isArray(audioReps) && audioReps.length > 0) {
+                                for (const a of audioReps) {
+                                    const aUrl = a.base_url || a.baseUrl || a.url;
+                                    if (aUrl && typeof aUrl === 'string') {
+                                        const cleanA = this.cleanVideoUrl(aUrl);
+                                        if (cleanA && this.isValidAudio(cleanA)) {
+                                            pairedAudio = cleanA;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (pairedAudio) {
+                            return { url: top.url, audioUrl: pairedAudio };
+                        }
+                        return top.url;
+                    }
+                }
+
+                // 2. Facebook HD Progressive URL (true HD master single file)
                 const hdCandidates = [
                     val.playable_url_quality_hd,
                     val.browser_native_hd_url,
                     val.hd_src,
-                    val.hd_src_no_ratelimit,
-                    val.progressive_download_url
+                    val.hd_src_no_ratelimit
                 ];
                 for (const c of hdCandidates) {
                     if (typeof c === 'string') {
                         const clean = this.cleanVideoUrl(c);
-                        if (clean && this.isValidVideo(clean) && !clean.toLowerCase().includes('stream_type=dash')) return clean;
+                        if (clean && this.isValidVideo(clean)) return clean;
                     }
                 }
 
-                // 2. Multi-version video candidate array (WITH AUDIO)
-                if (Array.isArray(val.video_versions) && val.video_versions.length > 0) {
-                    const valid = val.video_versions
-                        .map(v => (v && typeof v.url === 'string') ? this.cleanVideoUrl(v.url) : null)
-                        .filter(u => u && this.isValidVideo(u) && !u.toLowerCase().includes('stream_type=dash'));
-                    if (valid.length > 0) {
-                        return valid[0];
+                // 3. DASH Representations (1080p/720p representations paired with audio)
+                const reps = val.video_representations || val.representations;
+                if (Array.isArray(reps) && reps.length > 0) {
+                    let bestVideo = null;
+                    let bestAudio = null;
+
+                    for (const r of reps) {
+                        if (!r) continue;
+                        const rUrl = r.base_url || r.baseUrl || r.url;
+                        if (!rUrl || typeof rUrl !== 'string') continue;
+                        const clean = this.cleanVideoUrl(rUrl);
+                        if (!clean) continue;
+
+                        const mime = (r.mime_type || r.mimeType || '').toLowerCase();
+                        const isAudio = mime.includes('audio') || clean.includes('/audio') || clean.includes('mime=audio') || this.isAudio(clean);
+                        const bw = parseInt(r.bandwidth || r.bitrate || '0', 10);
+                        const w = parseInt(r.width || '0', 10);
+                        const h = parseInt(r.height || '0', 10);
+
+                        if (isAudio) {
+                            if (!bestAudio || bw > (bestAudio.bandwidth || 0)) {
+                                bestAudio = { url: clean, bandwidth: bw };
+                            }
+                        } else if (this.isValidVideo(clean)) {
+                            const resScore = (w * h) || bw;
+                            if (!bestVideo || resScore > ((bestVideo.width * bestVideo.height) || bestVideo.bandwidth || 0)) {
+                                bestVideo = { url: clean, width: w, height: h, bandwidth: bw };
+                            }
+                        }
+                    }
+
+                    if (!bestAudio) {
+                        const audioReps = val.audio_representations || val.audioRepresentations || (val.audio && val.audio.representations);
+                        if (Array.isArray(audioReps) && audioReps.length > 0) {
+                            for (const a of audioReps) {
+                                const aUrl = a.base_url || a.baseUrl || a.url;
+                                if (aUrl && typeof aUrl === 'string') {
+                                    const cleanA = this.cleanVideoUrl(aUrl);
+                                    if (cleanA && this.isValidAudio(cleanA)) {
+                                        bestAudio = { url: cleanA };
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (bestVideo) {
+                        return {
+                            url: bestVideo.url,
+                            audioUrl: bestAudio ? bestAudio.url : null
+                        };
                     }
                 }
 
-                // 3. Facebook SD Progressive URLs (WITH AUDIO)
+                // 4. Facebook SD Progressive & Generic URLs (fallback)
                 const sdCandidates = [
+                    val.progressive_download_url,
                     val.playable_url,
                     val.browser_native_sd_url,
                     val.sd_src,
                     val.sd_src_no_ratelimit,
+                    val.playback_url,
                     val.progressiveUrl,
+                    val.streamingUrl,
                     val.video_url,
                     val.videoUrl
                 ];
                 for (const c of sdCandidates) {
                     if (typeof c === 'string') {
                         const clean = this.cleanVideoUrl(c);
-                        if (clean && this.isValidVideo(clean) && !clean.toLowerCase().includes('stream_type=dash')) return clean;
+                        if (clean && this.isValidVideo(clean)) return clean;
                     }
                 }
-
             } else {
                 // High-resolution photo candidates on Facebook
                 if (val.viewer_image && typeof val.viewer_image.uri === 'string' && !val.viewer_image.uri.startsWith('blob:') && !this.isInternalUrl(val.viewer_image.uri)) {
@@ -684,95 +757,10 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             return null;
         },
 
-        extractDashVideoFromReact(val) {
-            if (!val || typeof val !== 'object') return null;
-            const dashCandidates = [
-                val.playback_url,
-                val.playbackUrl,
-                val.streamingUrl,
-                val.stream_url,
-                val.streamUrl,
-                val.unmuted_src,
-                val.unmutedSrc,
-                val.dash_manifest_url,
-                val.dashManifestUrl
-            ];
-            for (const c of dashCandidates) {
-                if (typeof c === 'string') {
-                    const clean = this.cleanVideoUrl(c);
-                    if (clean && this.isValidDashVideo(clean)) return clean;
-                }
-            }
-            if (Array.isArray(val.representations) && val.representations.length > 0) {
-                const videoReps = val.representations.filter(rep => {
-                    const u = rep && (rep.base_url || rep.baseUrl || rep.url || rep.playback_url || rep.playbackUrl);
-                    if (typeof u !== 'string') return false;
-                    const mime = (rep.mime_type || rep.mimeType || '').toLowerCase();
-                    if (mime.includes('audio')) return false;
-                    const clean = this.cleanVideoUrl(u);
-                    return clean && this.isValidDashVideo(clean);
-                });
-                if (videoReps.length > 0) {
-                    videoReps.sort((a, b) => {
-                        const resA = (a.width || 0) * (a.height || 0);
-                        const resB = (b.width || 0) * (b.height || 0);
-                        if (resB !== resA) return resB - resA;
-                        return (b.bandwidth || 0) - (a.bandwidth || 0);
-                    });
-                    const bestRep = videoReps[0];
-                    return this.cleanVideoUrl(bestRep.base_url || bestRep.baseUrl || bestRep.url || bestRep.playback_url || bestRep.playbackUrl);
-                }
-            }
-            return null;
-        },
-
-        extractPriorityAudioUrl(val) {
-            if (!val || typeof val !== 'object') return null;
-            const audioCandidates = [
-                val.audio_url,
-                val.audioUrl,
-                val.audio_src,
-                val.audioSrc,
-                val.audio_playback_url,
-                val.audioPlaybackUrl
-            ];
-            for (const c of audioCandidates) {
-                if (typeof c === 'string') {
-                    const clean = this.cleanVideoUrl(c);
-                    if (clean && (this.isValidAudio(clean) || this.isAudio(clean))) return clean;
-                }
-            }
-            if (Array.isArray(val.audio_streams) && val.audio_streams.length > 0) {
-                for (const s of val.audio_streams) {
-                    const u = s && (s.url || s.src);
-                    if (typeof u === 'string') {
-                        const clean = this.cleanVideoUrl(u);
-                        if (clean && (this.isValidAudio(clean) || this.isAudio(clean))) return clean;
-                    }
-                }
-            }
-            if (Array.isArray(val.representations) && val.representations.length > 0) {
-                const audioReps = val.representations.filter(rep => {
-                    const u = rep && (rep.base_url || rep.baseUrl || rep.url || rep.playback_url || rep.playbackUrl);
-                    if (typeof u !== 'string') return false;
-                    const mime = (rep.mime_type || rep.mimeType || '').toLowerCase();
-                    const clean = this.cleanVideoUrl(u);
-                    const isCdn = clean && (clean.includes('fbcdn.net') || clean.includes('fbsbx.com'));
-                    return isCdn && (mime.includes('audio') || this.isAudio(clean));
-                });
-                if (audioReps.length > 0) {
-                    audioReps.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
-                    const bestAudioRep = audioReps[0];
-                    return this.cleanVideoUrl(bestAudioRep.base_url || bestAudioRep.baseUrl || bestAudioRep.url || bestAudioRep.playback_url || bestAudioRep.playbackUrl);
-                }
-            }
-            return null;
-        },
-
         filterBackgroundUrls(candidates, isVideo) {
             return candidates.filter(u => {
                 if (isVideo) {
-                    return this.isValidVideo(u) || this.isValidDashVideo(u);
+                    return this.isValidVideo(u);
                 } else {
                     const lower = (u || '').toLowerCase();
                     if (lower.includes('.mp4') || lower.includes('video.fbcdn.net')) return false;
@@ -857,7 +845,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                     }
                 }
 
-                // 6. Direct regex search for CDN Progressive MP4
+                // 6. Direct regex search for CDN MP4
                 const cdnRegex = /"(https:(?:\\\/\\\/|\/\/)[^"]+?(?:fbcdn\.net|fbsbx\.com)[^"]+?\.(?:mp4|m4v)[^"]*)"/g;
                 let cdnM;
                 while ((cdnM = cdnRegex.exec(text)) !== null) {
@@ -874,210 +862,49 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                 return null;
             };
 
-            const videoId = this.extractVideoId(el);
-            if (!videoId) return null;
+            // 1. Identify Video ID if available
+            let videoId = null;
+            let current = el;
+            for (let i = 0; i < 10 && current; i++) {
+                if (current.dataset && (current.dataset.videoId || current.dataset.video_id)) {
+                    videoId = current.dataset.videoId || current.dataset.video_id;
+                    break;
+                }
+                const link = current.querySelector ? current.querySelector('a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"]') : null;
+                if (link && link.href) {
+                    const m = link.href.match(/(?:videos|watch\/?\?v=|reel\/)(\d+)/);
+                    if (m) { videoId = m[1]; break; }
+                }
+                current = current.parentElement;
+            }
+
+            if (!videoId) {
+                const urlMatch = window.location.href.match(/(?:videos|watch\/?\?v=|reel\/)(\d+)/);
+                if (urlMatch) videoId = urlMatch[1];
+            }
 
             const scripts = document.querySelectorAll('script[type="application/json"], script:not([src])');
+
+            // Pass 1: Scan scripts containing the videoId
+            if (videoId) {
+                for (const s of scripts) {
+                    const text = s.textContent;
+                    if (text && text.includes(videoId)) {
+                        const found = parseScriptText(text);
+                        if (found) return found;
+                    }
+                }
+            }
+
+            // Pass 2: Scan scripts with high-confidence playable keys
             for (const s of scripts) {
                 const text = s.textContent;
-                if (text && text.includes(videoId)) {
+                if (text && (text.includes('playable_url_quality_hd') || text.includes('browser_native_hd_url') || text.includes('progressive_download_url') || text.includes('playable_url'))) {
                     const found = parseScriptText(text);
                     if (found) return found;
                 }
             }
-            return null;
-        },
 
-        // --- Dedicated Video ID Extractor for Facebook ---
-        extractVideoId(el) {
-            if (!el) return null;
-
-            // 1. Check React Fiber on el and immediate parents (up to 7 levels, stopping at post boundary)
-            let current = el;
-            for (let i = 0; i < 7 && current; i++) {
-                const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
-                    k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-                if (key && current[key]) {
-                    const idFromObj = (obj, seen = new Set(), depth = 0) => {
-                        if (!obj || typeof obj !== 'object' || depth > 8 || seen.has(obj)) return null;
-                        seen.add(obj);
-                        if (obj.video_id && typeof obj.video_id === 'string') return obj.video_id;
-                        if (obj.videoId && typeof obj.videoId === 'string') return obj.videoId;
-                        if (obj.videoID && typeof obj.videoID === 'string') return obj.videoID;
-                        if (obj.target_id && typeof obj.target_id === 'string') return obj.target_id;
-                        if (obj.story_fbid && typeof obj.story_fbid === 'string') return obj.story_fbid;
-                        for (let k of Object.keys(obj)) {
-                            if (k === 'return' || k === 'sibling' || k === '_owner' || k === 'parent') continue;
-                            if (typeof obj[k] === 'object') {
-                                const found = idFromObj(obj[k], seen, depth + 1);
-                                if (found) return found;
-                            }
-                        }
-                        return null;
-                    };
-                    const id = idFromObj(current[key]);
-                    if (id) return id;
-                }
-                if (current.getAttribute && (current.getAttribute('role') === 'article' || (current.dataset && current.dataset.pagelet && current.dataset.pagelet.startsWith('FeedUnit')))) {
-                    break;
-                }
-                current = current.parentElement;
-            }
-
-            // 2. Check DOM data attributes or closest container
-            current = el;
-            for (let i = 0; i < 15 && current; i++) {
-                if (current.dataset && (current.dataset.videoId || current.dataset.video_id)) {
-                    return current.dataset.videoId || current.dataset.video_id;
-                }
-                const link = current.querySelector ? current.querySelector('a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"], a[href*="story_fbid="], a[href*="/posts/"], a[href*="fbid="]') : null;
-                if (link && link.href) {
-                    const m = link.href.match(/(?:videos\/|watch\/?\?v=|reel\/|posts\/|story_fbid=|fbid=)([a-zA-Z0-9]+)/);
-                    if (m && m[1]) return m[1];
-                }
-                if (current.getAttribute && (current.getAttribute('role') === 'article' || (current.dataset && current.dataset.pagelet && current.dataset.pagelet.startsWith('FeedUnit')))) {
-                    break;
-                }
-                current = current.parentElement;
-            }
-
-            // 3. Fallback to URL route if on a dedicated Reel or Watch URL
-            const urlMatch = window.location.href.match(/(?:videos\/|watch\/?\?v=|reel\/)([a-zA-Z0-9]+)/);
-            if (urlMatch && urlMatch[1]) return urlMatch[1];
-
-            return null;
-        },
-
-        // --- DOM Fallback for DASH Video-Only Streams (e.g. 2-Hour Videos/Reels) ---
-        extractDashVideoFromDOM(el) {
-            if (!el) return null;
-
-            const parseDashScriptText = (text) => {
-                if (!text) return null;
-
-                // 1. Check playback_url
-                const playbackMatch = text.match(/"playback_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
-                if (playbackMatch && playbackMatch[1]) {
-                    try {
-                        const raw = JSON.parse('"' + playbackMatch[1] + '"');
-                        const clean = this.cleanVideoUrl(raw);
-                        if (clean && this.isValidDashVideo(clean)) return clean;
-                    } catch(e) {
-                        const clean = this.cleanVideoUrl(playbackMatch[1]);
-                        if (clean && this.isValidDashVideo(clean)) return clean;
-                    }
-                }
-
-                // 2. Check stream_url / unmuted_src
-                const streamMatch = text.match(/"(?:stream_url|unmuted_src)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
-                if (streamMatch && streamMatch[1]) {
-                    try {
-                        const raw = JSON.parse('"' + streamMatch[1] + '"');
-                        const clean = this.cleanVideoUrl(raw);
-                        if (clean && this.isValidDashVideo(clean)) return clean;
-                    } catch(e) {
-                        const clean = this.cleanVideoUrl(streamMatch[1]);
-                        if (clean && this.isValidDashVideo(clean)) return clean;
-                    }
-                }
-
-                // 3. Check base_url in representations
-                const baseUrlRegex = /"base_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
-                let baseM;
-                while ((baseM = baseUrlRegex.exec(text)) !== null) {
-                    try {
-                        const raw = JSON.parse('"' + baseM[1] + '"');
-                        const clean = this.cleanVideoUrl(raw);
-                        if (clean && this.isValidDashVideo(clean)) return clean;
-                    } catch(e) {
-                        const clean = this.cleanVideoUrl(baseM[1]);
-                        if (clean && this.isValidDashVideo(clean)) return clean;
-                    }
-                }
-
-                return null;
-            };
-
-            const videoId = this.extractVideoId(el);
-            if (!videoId) return null;
-
-            const scripts = document.querySelectorAll('script[type="application/json"], script:not([src])');
-            for (const s of scripts) {
-                const text = s.textContent;
-                if (text && text.includes(videoId) && (text.includes('playback_url') || text.includes('representations') || text.includes('base_url') || text.includes('stream_url'))) {
-                    const found = parseDashScriptText(text);
-                    if (found) return found;
-                }
-            }
-            return null;
-        },
-
-        // --- DOM / Script Tag Audio Extractor for Facebook DASH streams ---
-        extractAudioUrlFromDOM(el) {
-            if (!el) return null;
-
-            const parseAudioScriptText = (text) => {
-                if (!text) return null;
-
-                // 1. Check audio representations (mime_type: audio/mp4)
-                const audioRepRegex = /"mime_type"\s*:\s*"audio\/mp4"[^}]*?"base_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/g;
-                let repM = audioRepRegex.exec(text);
-                if (!repM) {
-                    const audioRepRegex2 = /"base_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"[^}]*?"mime_type"\s*:\s*"audio\/mp4"/g;
-                    repM = audioRepRegex2.exec(text);
-                }
-                if (repM && repM[1]) {
-                    try {
-                        const raw = JSON.parse('"' + repM[1] + '"');
-                        const clean = this.cleanVideoUrl(raw);
-                        if (clean && (clean.includes('fbcdn.net') || clean.includes('fbsbx.com'))) return clean;
-                    } catch(e) {
-                        const clean = this.cleanVideoUrl(repM[1]);
-                        if (clean && (clean.includes('fbcdn.net') || clean.includes('fbsbx.com'))) return clean;
-                    }
-                }
-
-                // 2. Check audio_url / audio_src
-                const audioUrlMatch = text.match(/"audio(?:_src|_url|_playback_url)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
-                if (audioUrlMatch && audioUrlMatch[1]) {
-                    try {
-                        const raw = JSON.parse('"' + audioUrlMatch[1] + '"');
-                        const clean = this.cleanVideoUrl(raw);
-                        if (clean && (clean.includes('fbcdn.net') || clean.includes('fbsbx.com'))) return clean;
-                    } catch(e) {
-                        const clean = this.cleanVideoUrl(audioUrlMatch[1]);
-                        if (clean && (clean.includes('fbcdn.net') || clean.includes('fbsbx.com'))) return clean;
-                    }
-                }
-
-                // 3. Direct CDN audio track regex (/v/t42., stream_type=audio, mime=audio)
-                const cdnAudioRegex = /"(https:(?:\\\/\\\/|\/\/)[^"]+?(?:fbcdn\.net|fbsbx\.com)[^"]+?(?:\/v\/t42\.|stream_type=audio|mime(?:=|%3d)audio)[^"]*)"/g;
-                let cdnM;
-                while ((cdnM = cdnAudioRegex.exec(text)) !== null) {
-                    try {
-                        const raw = JSON.parse('"' + cdnM[1] + '"');
-                        const clean = this.cleanVideoUrl(raw);
-                        if (clean && (clean.includes('fbcdn.net') || clean.includes('fbsbx.com'))) return clean;
-                    } catch(e) {
-                        const clean = this.cleanVideoUrl(cdnM[1]);
-                        if (clean && (clean.includes('fbcdn.net') || clean.includes('fbsbx.com'))) return clean;
-                    }
-                }
-
-                return null;
-            };
-
-            const videoId = this.extractVideoId(el);
-            if (!videoId) return null;
-
-            const scripts = document.querySelectorAll('script[type="application/json"], script:not([src])');
-            for (const s of scripts) {
-                const text = s.textContent;
-                if (text && text.includes(videoId)) {
-                    const found = parseAudioScriptText(text);
-                    if (found) return found;
-                }
-            }
             return null;
         }
     };

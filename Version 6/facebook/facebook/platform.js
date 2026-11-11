@@ -29,6 +29,26 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
         version: 'v6.0',
         specialization: 'Per-page Facebook media extraction — Theater Mode, Watch Player, Reels, Stories, News Feed Posts, Groups, Photo Albums, and Profile Timeline.',
 
+        // --- Audio URL Detector ---
+        isAudio(url) {
+            if (!url || typeof url !== 'string') return false;
+            const lower = url.toLowerCase();
+            return lower.includes('/v/t42.') ||
+                   lower.includes('mime=audio') ||
+                   lower.includes('mime%3daudio') ||
+                   lower.includes('stream_type=audio') ||
+                   lower.includes('/audio/') ||
+                   lower.includes('audio_');
+        },
+
+        isValidAudio(url) {
+            if (!url || typeof url !== 'string') return false;
+            const lower = url.toLowerCase();
+            if (lower.startsWith('blob:') || lower.startsWith('data:')) return false;
+            const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
+            return isCdn && (this.isAudio(url) || lower.includes('.mp3') || lower.includes('.m4a') || lower.includes('.aac'));
+        },
+
         // --- Video URL Validator ---
         isValidVideo(url) {
             if (!url || typeof url !== 'string') return false;
@@ -36,8 +56,11 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             if (lower.startsWith('blob:') || lower.startsWith('data:')) return false;
             if (lower.includes('facebook.com') || lower.includes('messenger.com') || lower.includes('instagram.com')) return false;
             if (lower.includes('unified_cvc')) return false;
-            if (lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('stream_type=dash')) return false;
+            if (lower.includes('.mpd')) return false;
             
+            // Reject audio-only tracks when validating video
+            if (this.isAudio(url)) return false;
+
             // Reject image extensions & covers
             if (lower.includes('.jpg') || lower.includes('.jpeg') || lower.includes('.png') || lower.includes('.webp') || lower.includes('videocover') || lower.includes('/t15.')) {
                 return false;
@@ -45,7 +68,7 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
 
             const isCdn = lower.includes('fbcdn.net') || lower.includes('fbsbx.com');
             const isVideoExt = lower.includes('.mp4') || lower.includes('.m4v') || lower.includes('.webm');
-            const isVideoPath = lower.includes('/v/t42.') || lower.includes('/v/t64.') || lower.includes('/video/') || lower.includes('mime=video');
+            const isVideoPath = lower.includes('/v/t64.') || lower.includes('/video/') || lower.includes('mime=video') || lower.includes('stream_type=dash') || lower.includes('/o1/v/');
 
             return isCdn && (isVideoExt || isVideoPath);
         },
@@ -556,13 +579,56 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
             if (!val || typeof val !== 'object') return null;
 
             if (isVideoContext) {
-                // 1. Facebook HD Progressive URL (highest quality master)
+                // 1. Multi-version video candidate array - sorted by resolution (highest quality first)
+                if (Array.isArray(val.video_versions) && val.video_versions.length > 0) {
+                    const validVersions = val.video_versions
+                        .filter(v => v && typeof v.url === 'string')
+                        .map(v => ({
+                            url: this.cleanVideoUrl(v.url),
+                            width: v.width || 0,
+                            height: v.height || 0,
+                            bitrate: v.bitrate || 0
+                        }))
+                        .filter(v => v.url && this.isValidVideo(v.url))
+                        .sort((a, b) => {
+                            const resA = a.width * a.height;
+                            const resB = b.width * b.height;
+                            if (resB !== resA) return resB - resA;
+                            return b.bitrate - a.bitrate;
+                        });
+
+                    if (validVersions.length > 0) {
+                        const top = validVersions[0];
+                        let pairedAudio = null;
+                        const lowerTop = top.url.toLowerCase();
+                        if (lowerTop.includes('stream_type=dash') || lowerTop.includes('/o1/v/') || lowerTop.includes('mime=video')) {
+                            const audioReps = val.audio_representations || val.audioRepresentations || (val.audio && val.audio.representations);
+                            if (Array.isArray(audioReps) && audioReps.length > 0) {
+                                for (const a of audioReps) {
+                                    const aUrl = a.base_url || a.baseUrl || a.url;
+                                    if (aUrl && typeof aUrl === 'string') {
+                                        const cleanA = this.cleanVideoUrl(aUrl);
+                                        if (cleanA && this.isValidAudio(cleanA)) {
+                                            pairedAudio = cleanA;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (pairedAudio) {
+                            return { url: top.url, audioUrl: pairedAudio };
+                        }
+                        return top.url;
+                    }
+                }
+
+                // 2. Facebook HD Progressive URL (true HD master single file)
                 const hdCandidates = [
                     val.playable_url_quality_hd,
                     val.browser_native_hd_url,
                     val.hd_src,
-                    val.hd_src_no_ratelimit,
-                    val.progressive_download_url
+                    val.hd_src_no_ratelimit
                 ];
                 for (const c of hdCandidates) {
                     if (typeof c === 'string') {
@@ -571,18 +637,64 @@ window.ToystallerPlatforms = window.ToystallerPlatforms || {};
                     }
                 }
 
-                // 2. Multi-version video candidate array
-                if (Array.isArray(val.video_versions) && val.video_versions.length > 0) {
-                    const valid = val.video_versions
-                        .map(v => (v && typeof v.url === 'string') ? this.cleanVideoUrl(v.url) : null)
-                        .filter(u => u && this.isValidVideo(u));
-                    if (valid.length > 0) {
-                        return valid[0];
+                // 3. DASH Representations (1080p/720p representations paired with audio)
+                const reps = val.video_representations || val.representations;
+                if (Array.isArray(reps) && reps.length > 0) {
+                    let bestVideo = null;
+                    let bestAudio = null;
+
+                    for (const r of reps) {
+                        if (!r) continue;
+                        const rUrl = r.base_url || r.baseUrl || r.url;
+                        if (!rUrl || typeof rUrl !== 'string') continue;
+                        const clean = this.cleanVideoUrl(rUrl);
+                        if (!clean) continue;
+
+                        const mime = (r.mime_type || r.mimeType || '').toLowerCase();
+                        const isAudio = mime.includes('audio') || clean.includes('/audio') || clean.includes('mime=audio') || this.isAudio(clean);
+                        const bw = parseInt(r.bandwidth || r.bitrate || '0', 10);
+                        const w = parseInt(r.width || '0', 10);
+                        const h = parseInt(r.height || '0', 10);
+
+                        if (isAudio) {
+                            if (!bestAudio || bw > (bestAudio.bandwidth || 0)) {
+                                bestAudio = { url: clean, bandwidth: bw };
+                            }
+                        } else if (this.isValidVideo(clean)) {
+                            const resScore = (w * h) || bw;
+                            if (!bestVideo || resScore > ((bestVideo.width * bestVideo.height) || bestVideo.bandwidth || 0)) {
+                                bestVideo = { url: clean, width: w, height: h, bandwidth: bw };
+                            }
+                        }
+                    }
+
+                    if (!bestAudio) {
+                        const audioReps = val.audio_representations || val.audioRepresentations || (val.audio && val.audio.representations);
+                        if (Array.isArray(audioReps) && audioReps.length > 0) {
+                            for (const a of audioReps) {
+                                const aUrl = a.base_url || a.baseUrl || a.url;
+                                if (aUrl && typeof aUrl === 'string') {
+                                    const cleanA = this.cleanVideoUrl(aUrl);
+                                    if (cleanA && this.isValidAudio(cleanA)) {
+                                        bestAudio = { url: cleanA };
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (bestVideo) {
+                        return {
+                            url: bestVideo.url,
+                            audioUrl: bestAudio ? bestAudio.url : null
+                        };
                     }
                 }
 
-                // 3. Facebook SD Progressive & Generic URLs
+                // 4. Facebook SD Progressive & Generic URLs (fallback)
                 const sdCandidates = [
+                    val.progressive_download_url,
                     val.playable_url,
                     val.browser_native_sd_url,
                     val.sd_src,

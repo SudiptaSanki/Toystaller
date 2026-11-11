@@ -165,7 +165,8 @@
             if (domUrl) return domUrl;
         }
 
-        for (let i = 0; i < 12 && current; i++) {
+        // 1. Walk up from the media element
+        for (let i = 0; i < 16 && current; i++) {
             const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
                 k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
             if (key && current[key]) {
@@ -173,6 +174,21 @@
                 if (found) return found;
             }
             current = current.parentElement;
+        }
+
+        // 2. Check closest post container (article, reel card)
+        const container = el.closest ? el.closest('article, [role="dialog"], [role="presentation"], div[data-pagelet*="Reel"], div[tabindex="-1"]') : null;
+        if (container && container !== el) {
+            current = container;
+            for (let i = 0; i < 8 && current; i++) {
+                const key = Object.keys(current).find(k => k.startsWith('__reactProps$') || 
+                    k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                if (key && current[key]) {
+                    const found = searchObjForVideoUrl(current[key], new Set(), 0, isVideoContext);
+                    if (found) return found;
+                }
+                current = current.parentElement;
+            }
         }
 
         return null;

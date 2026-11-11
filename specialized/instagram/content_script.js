@@ -37,10 +37,17 @@ function bootToystaller() {
     }
 }
 
-const pageInterceptedVideoUrls = new Set();
+const pageInterceptedVideoUrls = [];
 window.addEventListener('message', (e) => {
     if (e.data && e.data.type === 'toystaller_video_urls' && Array.isArray(e.data.urls)) {
-        e.data.urls.forEach(url => pageInterceptedVideoUrls.add(url));
+        e.data.urls.forEach(url => {
+            if (url && typeof url === 'string') {
+                const idx = pageInterceptedVideoUrls.findIndex(item => item.url === url);
+                if (idx !== -1) pageInterceptedVideoUrls.splice(idx, 1);
+                pageInterceptedVideoUrls.unshift({ url, timestamp: Date.now() });
+                if (pageInterceptedVideoUrls.length > 20) pageInterceptedVideoUrls.pop();
+            }
+        });
     }
 });
 
@@ -402,18 +409,12 @@ function injectDownloadButtons() {
                 const currentSrc = media.currentSrc || media.src || '';
                 const isBlobSource = currentSrc.startsWith('blob:') || currentSrc.startsWith('data:');
 
-                if (isVideo && isBlobSource && pageInterceptedVideoUrls.size > 0) {
-                    const platform = PlatformManager.getPlatform();
-                    const platformVideos = platform.filterBackgroundUrls ? platform.filterBackgroundUrls(Array.from(pageInterceptedVideoUrls), true) : Array.from(pageInterceptedVideoUrls);
-
-                    if (platformVideos.length > 0) {
-                        const best = pickBestVideoUrl(platformVideos);
-                        if (best) {
-                            callback(best);
-                            return;
-                        }
-                    }
-                }
+                // 1. Locate enclosing post / reel container
+                const postContainer = media.closest ? media.closest('article, [role="dialog"], [role="presentation"], div[data-pagelet*="Reel"], div[tabindex="-1"]') : null;
+                const linkEl = postContainer ? postContainer.querySelector('a[href*="/p/"], a[href*="/reel/"]') : null;
+                const postUrl = linkEl ? linkEl.href : window.location.href;
+                const postMatch = postUrl.match(/\/(p|reel)\/([a-zA-Z0-9_\-]+)/);
+                const postShortcode = postMatch ? postMatch[2] : null;
 
                 const getFilename = (urlStr) => {
                     try {
@@ -425,14 +426,41 @@ function injectDownloadButtons() {
 
                 const currentFilename = getFilename(currentSrc);
 
-                if (isVideo && pageInterceptedVideoUrls.size > 0 && currentFilename) {
-                    const matches = Array.from(pageInterceptedVideoUrls).filter(u => {
-                        const interceptedName = getFilename(u);
-                        return interceptedName && interceptedName === currentFilename && !u.includes('bytestart');
-                    });
+                // 2. Correlate with recently intercepted URLs (prioritize exact match or shortcode)
+                if (isVideo && pageInterceptedVideoUrls.length > 0) {
+                    const platform = PlatformManager.getPlatform();
+                    const rawCandidates = pageInterceptedVideoUrls.map(item => item.url);
+                    const filtered = platform.filterBackgroundUrls ? platform.filterBackgroundUrls(rawCandidates, true) : rawCandidates;
 
-                    if (matches.length > 0) {
-                        const best = pickBestVideoUrl(matches);
+                    // Match by filename first if available
+                    if (currentFilename) {
+                        const fileMatches = filtered.filter(u => getFilename(u) === currentFilename && !u.includes('bytestart'));
+                        if (fileMatches.length > 0) {
+                            const best = pickBestVideoUrl(fileMatches);
+                            if (best) {
+                                callback(best);
+                                return;
+                            }
+                        }
+                    }
+
+                    // Match by post shortcode if embedded in URL
+                    if (postShortcode) {
+                        const codeMatches = filtered.filter(u => u.includes(postShortcode));
+                        if (codeMatches.length > 0) {
+                            const best = pickBestVideoUrl(codeMatches);
+                            if (best) {
+                                callback(best);
+                                return;
+                            }
+                        }
+                    }
+
+                    // For blob sources, use most recent candidate intercepted during the active playback window
+                    if (isBlobSource && filtered.length > 0) {
+                        // Use only the most recent 3 candidates so we don't pick an old scrolled reel
+                        const recentCandidates = filtered.slice(0, 3);
+                        const best = pickBestVideoUrl(recentCandidates);
                         if (best) {
                             callback(best);
                             return;
@@ -506,6 +534,13 @@ function injectDownloadButtons() {
                     setTimeout(doPreResolve, 200);
                     media.addEventListener('play', doPreResolve, { passive: true });
                     media.addEventListener('playing', doPreResolve, { passive: true });
+                    media.addEventListener('loadstart', () => {
+                        const overlay = window.magicOverlayManager.overlays.get(media);
+                        if (overlay && overlay.container) {
+                            const openBtn = overlay.container.querySelector('.magic-open-btn');
+                            if (openBtn) openBtn.__resolvedVideoUrl = null;
+                        }
+                    }, { passive: true });
                 }
             }
         }
